@@ -6,6 +6,7 @@ export class JsonRpcConnection extends EventEmitter {
     this.input = input;
     this.output = output;
     this.buffer = "";
+    this.framing = "content-length";
   }
 
   start() {
@@ -28,6 +29,7 @@ export class JsonRpcConnection extends EventEmitter {
 
   readNextMessage() {
     if (this.buffer.startsWith("Content-Length:")) {
+      this.framing = "content-length";
       const headerEnd = this.buffer.indexOf("\r\n\r\n");
       if (headerEnd === -1) {
         return null;
@@ -62,11 +64,16 @@ export class JsonRpcConnection extends EventEmitter {
     if (!line) {
       return null;
     }
+    this.framing = "newline";
     return JSON.parse(line);
   }
 
   send(message) {
     const body = JSON.stringify(message);
+    if (this.framing === "newline") {
+      this.output.write(`${body}\n`);
+      return;
+    }
     this.output.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
   }
 }

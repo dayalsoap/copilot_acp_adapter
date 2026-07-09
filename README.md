@@ -57,6 +57,37 @@ API keys can also be supplied with `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHU
 
 Unauthenticated prompt execution will fail until one of those auth methods is available.
 
+## Emacs `agent-shell.el`
+
+`agent-shell` uses newline-delimited JSON for ACP traffic. The adapter auto-detects
+that framing and replies in the same format.
+
+Configure the GitHub Copilot agent to use this adapter instead of Copilot CLI's
+built-in `--acp` mode:
+
+```elisp
+(require 'agent-shell)
+(require 'agent-shell-github)
+
+(setq agent-shell-github-acp-command
+      '("node" "/home/jai/copilot_acp_adapter/bin/copilot-acp-adapter.js"))
+
+(setq agent-shell-github-environment
+      '("COPILOT_COMMAND=/home/jai/.local/bin/copilot"
+        "COPILOT_TRANSPORT=prompt"
+        "COPILOT_ARGS=[\"--allow-all-tools\",\"--silent\",\"--no-color\"]"))
+```
+
+Then run:
+
+```text
+M-x agent-shell-github-start-copilot
+```
+
+If the buffer stays on `Loading`, check `*Messages*` and any
+`acp-client-stderr(...)` buffer. The first startup phase should complete after
+the adapter replies to `initialize` and `session/new`.
+
 ## Slash Commands
 
 All commands from `AGENTS.md` are listed and passed through:

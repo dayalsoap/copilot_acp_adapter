@@ -93,6 +93,7 @@ Relevant environment variables:
 
 - Authenticate before true end-to-end prompt testing. Use `/home/jai/.local/bin/copilot login`, `/login api-key <token>` through the adapter, or export `COPILOT_GITHUB_TOKEN`.
 - Confirm exact ACP schema compatibility against the target Emacs `agent-shell.el` client. The adapter intentionally supports common aliases like `newSession`/`session/new` and `prompt`/`session/prompt`, but the client may require stricter names or update shapes.
+- `acp.el` uses newline-delimited JSON, not `Content-Length` framing. The adapter now auto-detects incoming framing and replies with newline JSON for Emacs clients.
 - Validate whether running every slash command through `copilot -p "/command"` behaves like interactive slash commands. If some commands require a persistent TTY session, the runner will need a persistent interactive Copilot process instead of one subprocess per prompt.
 - Add integration tests once authentication is available. Start with `/help`, `/skills`, `/agent`, `/mcp`, and a plain prompt.
 - Replace generic command descriptions in `src/commands.js` with the exact text from `copilot help commands` if client UX needs richer command menus.
