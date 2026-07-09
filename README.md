@@ -36,6 +36,7 @@ COPILOT_TRANSPORT=prompt # prompt, stdin, argv, or command
 COPILOT_MODEL=auto
 COPILOT_MODEL_NAME=Auto
 COPILOT_MODELS=auto,claude-sonnet-5,gpt-5.4
+COPILOT_MODEL_DISCOVERY_TIMEOUT_MS=3000
 COPILOT_MODE=agent # agent, plan, or autopilot
 GITHUB_ENTERPRISE_HOST=ghe.example.com
 COPILOT_GITHUB_TOKEN=...
@@ -100,9 +101,10 @@ built-in `--acp` mode:
         "COPILOT_ARGS=[\"--allow-all-tools\",\"--silent\",\"--no-color\"]"))
 ```
 
-The adapter advertises Copilot CLI's known model ids to `agent-shell`, so
-`M-x agent-shell-set-session-model` can offer the same model picker shape as the
-native Copilot ACP server. To set the initial model explicitly:
+The adapter asks Copilot's native ACP server for its filtered model list before
+advertising models to `agent-shell`, so administrator-disabled models should be
+omitted from `M-x agent-shell-set-session-model`. To set the initial model
+explicitly:
 
 ```elisp
 (add-to-list 'agent-shell-github-environment
@@ -114,8 +116,9 @@ native Copilot ACP server. To set the initial model explicitly:
 The adapter passes `COPILOT_MODEL` to Copilot as `--model <id>` for prompts.
 If `COPILOT_MODEL=auto`, the header shows `Auto`; the adapter cannot know which
 server-side model Copilot eventually picks unless Copilot exposes that choice.
-Use `COPILOT_MODELS` as a comma-separated or JSON array override if your
-installed Copilot CLI exposes newer model ids than this adapter knows about.
+Use `COPILOT_MODELS` as a comma-separated or JSON array override to skip native
+ACP discovery. If discovery fails or times out, the adapter falls back to its
+static Copilot CLI model catalog.
 The session mode defaults to `Agent` and can be changed from the `agent-shell`
 mode menu when available.
 

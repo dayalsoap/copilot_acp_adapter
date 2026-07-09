@@ -12,6 +12,8 @@ export function loadConfig(env = process.env) {
     copilotModel: env.COPILOT_MODEL || findArgValue(parseArgs(env.COPILOT_ARGS || ""), "--model") || "auto",
     copilotModelName: env.COPILOT_MODEL_NAME || "",
     copilotModels: parseModelCatalog(env.COPILOT_MODELS || ""),
+    copilotModelsOverride: Boolean(env.COPILOT_MODELS),
+    modelDiscoveryTimeoutMs: Number(env.COPILOT_MODEL_DISCOVERY_TIMEOUT_MS || 3000),
     copilotMode: env.COPILOT_MODE || findArgValue(parseArgs(env.COPILOT_ARGS || ""), "--mode") || "agent",
     cwd: env.COPILOT_CWD || cwd(),
     githubHost: normalizeHost(env.GITHUB_HOST || "https://github.com"),

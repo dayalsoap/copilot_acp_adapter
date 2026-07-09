@@ -34,6 +34,7 @@ function createAdapter() {
       copilotModel: "claude-sonnet-5",
       copilotModelName: "Claude Sonnet 5",
       copilotModels: ["auto", "claude-sonnet-5", "gpt-5.4", "gemini-3.5-flash"],
+      copilotModelsOverride: true,
       copilotMode: "agent",
       githubHost: "https://github.com",
       enterpriseHost: "",

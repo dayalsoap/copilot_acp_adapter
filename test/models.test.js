@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_MODEL_IDS, modelDisplayName, parseModelCatalog } from "../src/models.js";
+import {
+  DEFAULT_MODEL_IDS,
+  listConfiguredModels,
+  modelDisplayName,
+  parseNativeAcpModelsOutput,
+  parseModelCatalog,
+} from "../src/models.js";
 
 test("default model catalog includes Copilot CLI models", () => {
   assert.equal(DEFAULT_MODEL_IDS.includes("auto"), true);
@@ -25,4 +31,35 @@ test("model display names are human readable", () => {
   assert.equal(modelDisplayName("auto"), "Auto");
   assert.equal(modelDisplayName("gpt-5.4-mini"), "GPT 5 4 Mini");
   assert.equal(modelDisplayName("claude-sonnet-5"), "Claude Sonnet 5");
+});
+
+test("native ACP model parser reads filtered available models", () => {
+  const output = [
+    JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        models: {
+          availableModels: [{ modelId: "auto" }, { modelId: "allowed-model" }],
+        },
+      },
+    }),
+  ].join("\n");
+
+  assert.deepEqual(parseNativeAcpModelsOutput(output), [
+    "auto",
+    "allowed-model",
+  ]);
+});
+
+test("explicit model catalog override bypasses native discovery", () => {
+  assert.deepEqual(
+    listConfiguredModels({
+      copilotModelsOverride: true,
+      copilotModels: ["auto", "override-model"],
+      copilotCommand: "/does/not/exist",
+    }),
+    ["auto", "override-model"],
+  );
 });

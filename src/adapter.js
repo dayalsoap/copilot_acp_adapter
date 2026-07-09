@@ -12,7 +12,7 @@ import {
   parseCommandArgs,
   parseSlashCommand,
 } from "./commands.js";
-import { modelDisplayName } from "./models.js";
+import { listConfiguredModels, modelDisplayName } from "./models.js";
 import { discoverProjectAgents, discoverProjectSkills } from "./project-agents.js";
 import {
   getSetting,
@@ -1046,7 +1046,7 @@ function sessionSummary(session) {
 
 function sessionModels(session, config) {
   const currentModelId = session.modelId || "auto";
-  const modelIds = [...(config.copilotModels || [])];
+  const modelIds = [...listConfiguredModels(config)];
   if (!modelIds.includes(currentModelId)) {
     modelIds.unshift(currentModelId);
   }
