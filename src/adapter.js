@@ -12,6 +12,7 @@ import {
   parseCommandArgs,
   parseSlashCommand,
 } from "./commands.js";
+import { modelDisplayName } from "./models.js";
 import { discoverProjectAgents, discoverProjectSkills } from "./project-agents.js";
 import {
   getSetting,
@@ -1045,18 +1046,24 @@ function sessionSummary(session) {
 
 function sessionModels(session, config) {
   const currentModelId = session.modelId || "auto";
+  const modelIds = [...(config.copilotModels || [])];
+  if (!modelIds.includes(currentModelId)) {
+    modelIds.unshift(currentModelId);
+  }
+
   return {
     currentModelId,
-    availableModels: [
-      {
-        modelId: currentModelId,
-        name: config.copilotModelName || modelDisplayName(currentModelId),
-        description:
-          currentModelId === "auto"
-            ? "Copilot chooses the model automatically"
-            : "Configured Copilot model",
-      },
-    ],
+    availableModels: modelIds.map((modelId) => ({
+      modelId,
+      name:
+        modelId === currentModelId && config.copilotModelName
+          ? config.copilotModelName
+          : modelDisplayName(modelId),
+      description:
+        modelId === "auto"
+          ? "Copilot chooses the model automatically"
+          : "Copilot CLI model",
+    })),
   };
 }
 
@@ -1081,23 +1088,6 @@ function sessionModes(session) {
       },
     ],
   };
-}
-
-function modelDisplayName(modelId) {
-  if (!modelId || modelId === "auto") {
-    return "Auto";
-  }
-
-  return modelId
-    .split(/[-_.\s]+/)
-    .filter(Boolean)
-    .map((part) => {
-      if (/^gpt$/i.test(part)) {
-        return "GPT";
-      }
-      return part.charAt(0).toUpperCase() + part.slice(1);
-    })
-    .join(" ");
 }
 
 function normalizeModeId(modeId) {

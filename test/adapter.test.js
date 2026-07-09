@@ -33,6 +33,7 @@ function createAdapter() {
       copilotArgs: ["--allow-all-tools", "--model", "ignored-base-model"],
       copilotModel: "claude-sonnet-5",
       copilotModelName: "Claude Sonnet 5",
+      copilotModels: ["auto", "claude-sonnet-5", "gpt-5.4", "gemini-3.5-flash"],
       copilotMode: "agent",
       githubHost: "https://github.com",
       enterpriseHost: "",
@@ -87,7 +88,14 @@ test("session/new exposes model and mode metadata for agent-shell header", async
   const result = await adapter.handle("session/new", { cwd: "/repo" });
 
   assert.equal(result.models.currentModelId, "claude-sonnet-5");
-  assert.equal(result.models.availableModels[0].name, "Claude Sonnet 5");
+  assert.equal(
+    result.models.availableModels.find((model) => model.modelId === "claude-sonnet-5").name,
+    "Claude Sonnet 5",
+  );
+  assert.deepEqual(
+    result.models.availableModels.map((model) => model.modelId),
+    ["auto", "claude-sonnet-5", "gpt-5.4", "gemini-3.5-flash"],
+  );
   assert.equal(result.modes.currentModeId, "agent");
   assert.equal(result.modes.availableModes.some((mode) => mode.id === "plan"), true);
 });

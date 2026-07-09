@@ -2,6 +2,7 @@ import { cwd } from "node:process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parseModelCatalog } from "./models.js";
 
 export function loadConfig(env = process.env) {
   return {
@@ -10,6 +11,7 @@ export function loadConfig(env = process.env) {
     copilotTransport: env.COPILOT_TRANSPORT || "prompt",
     copilotModel: env.COPILOT_MODEL || findArgValue(parseArgs(env.COPILOT_ARGS || ""), "--model") || "auto",
     copilotModelName: env.COPILOT_MODEL_NAME || "",
+    copilotModels: parseModelCatalog(env.COPILOT_MODELS || ""),
     copilotMode: env.COPILOT_MODE || findArgValue(parseArgs(env.COPILOT_ARGS || ""), "--mode") || "agent",
     cwd: env.COPILOT_CWD || cwd(),
     githubHost: normalizeHost(env.GITHUB_HOST || "https://github.com"),
