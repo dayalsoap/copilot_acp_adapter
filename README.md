@@ -87,6 +87,16 @@ built-in `--acp` mode:
         "COPILOT_ARGS=[\"--allow-all-tools\",\"--silent\",\"--no-color\"]"))
 ```
 
+By default, `agent-shell` starts sessions at the project root. To start Copilot
+in the current Emacs `default-directory` instead, for example after `M-x cd` into
+a subdirectory, add:
+
+```elisp
+(setq agent-shell-cwd-function
+      (lambda ()
+        default-directory))
+```
+
 For token auth, add this to the environment list:
 
 ```elisp
