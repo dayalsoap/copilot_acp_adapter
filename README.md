@@ -42,6 +42,7 @@ COPILOT_LOGIN_BROWSER=echo
 COPILOT_LOGIN_HEADLESS=1
 COPILOT_FORCE_TTY_DIRECT_COMMANDS=0
 COPILOT_SCRIPT_STYLE=auto # only used when forcing TTY direct commands
+COPILOT_SESSION_STATE_PATH=$HOME/.copilot/session-state
 ```
 
 ## ACP Methods
@@ -49,6 +50,8 @@ COPILOT_SCRIPT_STYLE=auto # only used when forcing TTY direct commands
 - `initialize`: returns `protocolVersion: 1`, `agentCapabilities`, `agentInfo`, and `authMethods`.
 - `authenticate`: supports `github.com`, `github-enterprise`, and `api-key` method IDs.
 - `newSession` or `session/new`: creates a session and returns `sessionId`.
+- `session/list`: lists previous Copilot CLI conversations for the requested `cwd`.
+- `session/load`: resumes a previous Copilot CLI conversation by session id.
 - `prompt` or `session/prompt`: routes slash commands or forwards prompt text to Copilot, emitting output through `session/update`.
 - `session/close`: drops adapter-side session state.
 - `session/cancel`: accepted for clients that send cancellation notifications.
@@ -163,6 +166,13 @@ Routing is adapter-owned rather than a proxy to `copilot --acp`:
 directory. In Emacs agent-shell, this is controlled by
 `agent-shell-cwd-function`; when the client does not send a cwd, the adapter
 uses its startup directory.
+
+The adapter advertises ACP session listing/loading and reads Copilot CLI
+conversation metadata from `$COPILOT_HOME/session-state` or
+`COPILOT_SESSION_STATE_PATH`. `session/list` mirrors Copilot's ACP behavior by
+returning completed conversations whose stored workspace `cwd` matches the
+requested cwd. `session/load` maps the selected id to subsequent Copilot prompt
+calls via `--session-id`.
 
 `/subagents` is implemented natively because Copilot exposes it only as an
 interactive UI command. The adapter discovers project-defined agents from

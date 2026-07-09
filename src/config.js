@@ -30,6 +30,9 @@ export function loadConfig(env = process.env) {
     copilotSettingsPath:
       env.COPILOT_SETTINGS_PATH ||
       join(env.COPILOT_HOME || join(homedir(), ".copilot"), "settings.json"),
+    copilotSessionStatePath:
+      env.COPILOT_SESSION_STATE_PATH ||
+      join(env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state"),
   };
 }
 

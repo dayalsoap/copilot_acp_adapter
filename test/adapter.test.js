@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -7,6 +7,7 @@ import { CopilotAcpAdapter } from "../src/adapter.js";
 
 function createAdapter() {
   const settingsDir = mkdtempSync(join(tmpdir(), "copilot-acp-settings-"));
+  const sessionStateDir = mkdtempSync(join(tmpdir(), "copilot-acp-session-state-"));
   const calls = [];
   const notifications = [];
   const runner = {
@@ -39,13 +40,36 @@ function createAdapter() {
       loginBrowser: "echo",
       loginHeadless: true,
       copilotSettingsPath: join(settingsDir, "settings.json"),
+      copilotSessionStatePath: sessionStateDir,
     },
     runner,
     notify(method, params) {
       notifications.push({ method, params });
     },
   });
-  return { adapter, runner, notifications, settingsPath: join(settingsDir, "settings.json") };
+  return {
+    adapter,
+    runner,
+    notifications,
+    settingsPath: join(settingsDir, "settings.json"),
+    sessionStateDir,
+  };
+}
+
+function writeStoredWorkspace(sessionStateDir, sessionId, fields) {
+  const sessionDir = join(sessionStateDir, sessionId);
+  mkdirSync(sessionDir, { recursive: true });
+  const lines = [
+    `id: ${sessionId}`,
+    `cwd: ${fields.cwd}`,
+    fields.name ? `name: ${fields.name}` : "",
+    `updated_at: ${fields.updated_at}`,
+  ].filter(Boolean);
+  writeFileSync(join(sessionDir, "workspace.yaml"), `${lines.join("\n")}\n`);
+  const eventsPath = join(sessionDir, "events.jsonl");
+  writeFileSync(eventsPath, JSON.stringify({ type: "session.start" }) + "\n");
+  const updatedAt = new Date(fields.updated_at);
+  utimesSync(eventsPath, updatedAt, updatedAt);
 }
 
 test("initialize exposes ACP v1 capabilities and auth methods", async () => {
@@ -53,6 +77,8 @@ test("initialize exposes ACP v1 capabilities and auth methods", async () => {
   const result = await adapter.handle("initialize");
   assert.equal(result.protocolVersion, 1);
   assert.equal(result.agentCapabilities._meta.slashCommandPassthrough, true);
+  assert.equal(result.agentCapabilities.loadSession, true);
+  assert.deepEqual(result.agentCapabilities.sessionCapabilities.list, {});
   assert.equal(result.authMethods.some((method) => method.id === "github-enterprise"), true);
 });
 
@@ -64,6 +90,68 @@ test("session/new exposes model and mode metadata for agent-shell header", async
   assert.equal(result.models.availableModels[0].name, "Claude Sonnet 5");
   assert.equal(result.modes.currentModeId, "agent");
   assert.equal(result.modes.availableModes.some((mode) => mode.id === "plan"), true);
+});
+
+test("session/list returns stored conversations for the requested cwd", async () => {
+  const { adapter, sessionStateDir } = createAdapter();
+  writeStoredWorkspace(sessionStateDir, "older", {
+    cwd: "/repo",
+    name: "Older session",
+    updated_at: "2026-01-01T00:00:00.000Z",
+  });
+  writeStoredWorkspace(sessionStateDir, "newer", {
+    cwd: "/repo",
+    name: "Newer session",
+    updated_at: "2026-01-02T00:00:00.000Z",
+  });
+  writeStoredWorkspace(sessionStateDir, "other", {
+    cwd: "/other",
+    name: "Other session",
+    updated_at: "2026-01-03T00:00:00.000Z",
+  });
+
+  const result = await adapter.handle("session/list", { cwd: "/repo" });
+
+  assert.deepEqual(result.sessions, [
+    {
+      sessionId: "newer",
+      cwd: "/repo",
+      title: "Newer session",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    },
+    {
+      sessionId: "older",
+      cwd: "/repo",
+      title: "Older session",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+  ]);
+});
+
+test("session/load resumes prompts with selected Copilot session id", async () => {
+  const { adapter, runner, sessionStateDir } = createAdapter();
+  writeStoredWorkspace(sessionStateDir, "stored-session", {
+    cwd: "/repo",
+    name: "Stored session",
+    updated_at: "2026-01-01T00:00:00.000Z",
+  });
+
+  const loaded = await adapter.handle("session/load", {
+    sessionId: "stored-session",
+    cwd: "/repo",
+    mcpServers: [],
+  });
+  await adapter.handle("session/prompt", {
+    sessionId: loaded.sessionId,
+    prompt: "continue",
+  });
+
+  assert.equal(loaded.sessionId, "stored-session");
+  assert.equal(loaded.cwd, "/repo");
+  assert.deepEqual(runner.calls[0].options.copilotArgs.slice(-2), [
+    "--session-id",
+    "stored-session",
+  ]);
 });
 
 test("session model and mode changes affect subsequent Copilot args", async () => {

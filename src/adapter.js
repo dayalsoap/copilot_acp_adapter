@@ -22,6 +22,7 @@ import {
   unsetSetting,
   writeSettings,
 } from "./settings.js";
+import { listStoredSessions, readStoredSession } from "./session-store.js";
 
 const DIRECT_COPILOT_COMMANDS = Object.freeze({
   "/init": { args: ["init"] },
@@ -58,6 +59,10 @@ export class CopilotAcpAdapter {
         return this.newSession(params);
       case "session/close":
         return this.closeSession(params);
+      case "session/list":
+        return this.listSessions(params);
+      case "session/load":
+        return this.loadSession(params);
       case "session/set_model":
         return this.setModel(params);
       case "session/set_mode":
@@ -83,9 +88,11 @@ export class CopilotAcpAdapter {
         auth: {
           logout: {},
         },
+        loadSession: true,
         sessionCapabilities: {
           close: {},
           additionalDirectories: {},
+          list: {},
         },
         _meta: {
           slashCommandPassthrough: true,
@@ -138,11 +145,54 @@ export class CopilotAcpAdapter {
     };
     this.sessions.set(sessionId, session);
     this.sendAvailableCommands(sessionId);
+    return this.sessionStartResult(session);
+  }
+
+  sessionStartResult(session) {
     return {
-      sessionId,
+      sessionId: session.id,
+      cwd: session.cwd,
       models: sessionModels(session, this.config),
       modes: sessionModes(session),
     };
+  }
+
+  listSessions(params = {}) {
+    return {
+      sessions: listStoredSessions({
+        sessionStatePath: this.config.copilotSessionStatePath,
+        cwd: params.cwd || this.config.cwd,
+        limit: params.limit || 50,
+      }),
+    };
+  }
+
+  loadSession(params = {}) {
+    const sessionId = params.sessionId;
+    if (!sessionId) {
+      throw Object.assign(new Error("sessionId is required"), { code: -32602 });
+    }
+
+    const stored = readStoredSession({
+      sessionStatePath: this.config.copilotSessionStatePath,
+      sessionId,
+    });
+    const cwd = params.cwd || stored?.cwd || this.config.cwd;
+    const session = {
+      id: sessionId,
+      cwd,
+      additionalDirectories: params.additionalDirectories || [],
+      env: {},
+      modelId: this.config.copilotModel || "auto",
+      modeId: normalizeModeId(this.config.copilotMode || "agent"),
+      copilotSessionId: sessionId,
+      name: stored?.title || params.name || "",
+      allowAll: false,
+      createdAt: new Date().toISOString(),
+    };
+    this.sessions.set(sessionId, session);
+    this.sendAvailableCommands(sessionId);
+    return this.sessionStartResult(session);
   }
 
   closeSession(params = {}) {
