@@ -86,6 +86,7 @@ Relevant environment variables:
 - `/login github` and `/login github.com` run `copilot login --host https://github.com`.
 - `/login enterprise ghe.example.com` runs `copilot login --host https://ghe.example.com`.
 - `/login api-key <token>` stores the token in adapter session env as `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_TOKEN`.
+- Login runs headless by default with `BROWSER=echo` and `CI=1`, so Emacs receives a copyable device-flow URL/code instead of Copilot trying to open a browser on the host running the adapter.
 - ACP `authenticate` supports method IDs `github.com`, `github-enterprise`, and `api-key`.
 - ACP `logout` currently only clears adapter-held token environment. Copilot CLI 1.0.69 does not expose a top-level `copilot logout`; `/logout` is an interactive slash command.
 

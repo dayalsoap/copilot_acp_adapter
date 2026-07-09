@@ -7,6 +7,8 @@ const config = {
   githubHost: "https://github.com",
   enterpriseHost: "https://ghe.example.com",
   apiKey: "",
+  loginBrowser: "echo",
+  loginHeadless: true,
 };
 
 test("builds GitHub.com login command", () => {
@@ -16,7 +18,7 @@ test("builds GitHub.com login command", () => {
     ok: true,
     command: "/home/jai/.local/bin/copilot",
     args: ["login", "--host", "https://github.com"],
-    env: {},
+    env: { BROWSER: "echo", CI: "1" },
     message: "Starting GitHub authentication for https://github.com.",
   });
 });

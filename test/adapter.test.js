@@ -13,6 +13,7 @@ function createAdapter() {
     },
     async runCommand(command, args, options) {
       calls.push({ type: "command", command, args, options });
+      options.onStdout?.("To authenticate, visit https://github.com/login/device and enter code ABCD-1234.\n");
       return { ok: true, exitCode: 0, stdout: "logged in", stderr: "" };
     },
   };
@@ -23,6 +24,8 @@ function createAdapter() {
       githubHost: "https://github.com",
       enterpriseHost: "",
       apiKey: "",
+      loginBrowser: "echo",
+      loginHeadless: true,
     },
     runner,
     notify(method, params) {
@@ -81,4 +84,23 @@ test("login api-key stores env in the session", async () => {
   assert.equal(result.stopReason, "end_turn");
   await adapter.handle("session/prompt", { sessionId, prompt: "hello" });
   assert.equal(runner.calls[0].options.env.COPILOT_GITHUB_TOKEN, "test-token");
+});
+
+test("login github streams device-flow output to the session", async () => {
+  const { adapter, notifications } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", {});
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/login github",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(
+    notifications.some(
+      (notification) =>
+        notification.method === "session/update" &&
+        notification.params.update.content?.text.includes("https://github.com/login/device"),
+    ),
+    true,
+  );
 });

@@ -19,6 +19,8 @@ export function loadConfig(env = process.env) {
       env.COPILOT_API_KEY ||
       "",
     ghCommand: env.GH_COMMAND || "gh",
+    loginBrowser: env.COPILOT_LOGIN_BROWSER || "echo",
+    loginHeadless: env.COPILOT_LOGIN_HEADLESS !== "0",
     requestTimeoutMs: Number(env.COPILOT_REQUEST_TIMEOUT_MS || 0),
   };
 }

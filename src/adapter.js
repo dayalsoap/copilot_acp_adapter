@@ -182,13 +182,24 @@ export class CopilotAcpAdapter {
       };
     }
 
+    this.sendText(session?.id, plan.message);
+    let streamed = false;
     const result = await this.runner.runCommand(plan.command, plan.args, {
       cwd: session?.cwd || this.config.cwd,
       env: plan.env,
       timeoutMs: 0,
+      onStdout: (text) => {
+        streamed = true;
+        this.sendText(session?.id, text);
+      },
+      onStderr: (text) => {
+        streamed = true;
+        this.sendText(session?.id, text, "agent_message_chunk", { stream: "stderr" });
+      },
     });
-    this.sendText(session?.id, plan.message);
-    this.sendOutput(session?.id, result);
+    if (!streamed) {
+      this.sendOutput(session?.id, result);
+    }
 
     return {
       stopReason: result.ok ? "end_turn" : "error",

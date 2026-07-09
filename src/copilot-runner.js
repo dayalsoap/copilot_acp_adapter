@@ -43,11 +43,13 @@ export class CopilotRunner {
       cwd: config.cwd,
       env: { ...process.env, ...(options.env || {}) },
       timeoutMs: Number(options.timeoutMs ?? config.requestTimeoutMs ?? 0),
+      onStdout: options.onStdout,
+      onStderr: options.onStderr,
     });
   }
 }
 
-export function runProcess({ command, args, input, cwd, env, timeoutMs }) {
+export function runProcess({ command, args, input, cwd, env, timeoutMs, onStdout, onStderr }) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd,
@@ -67,11 +69,15 @@ export function runProcess({ command, args, input, cwd, env, timeoutMs }) {
     }
 
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      const text = chunk.toString();
+      stdout += text;
+      onStdout?.(text);
     });
 
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      const text = chunk.toString();
+      stderr += text;
+      onStderr?.(text);
     });
 
     child.on("error", (error) => {

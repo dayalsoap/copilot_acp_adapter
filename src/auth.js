@@ -99,7 +99,12 @@ export function buildGithubLoginCommand(login, config) {
     ok: true,
     command: config.copilotCommand,
     args: ["login", "--host", host],
-    env: {},
+    env: config.loginHeadless
+      ? {
+          BROWSER: config.loginBrowser || "echo",
+          CI: "1",
+        }
+      : {},
     message: `Starting GitHub authentication for ${host}.`,
   };
 }

@@ -31,6 +31,8 @@ COPILOT_ARGS='["--allow-all-tools", "--silent", "--no-color"]'
 COPILOT_TRANSPORT=prompt # prompt, stdin, argv, or command
 GITHUB_ENTERPRISE_HOST=ghe.example.com
 COPILOT_GITHUB_TOKEN=...
+COPILOT_LOGIN_BROWSER=echo
+COPILOT_LOGIN_HEADLESS=1
 ```
 
 ## ACP Methods
@@ -57,6 +59,12 @@ API keys can also be supplied with `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHU
 
 Unauthenticated prompt execution will fail until one of those auth methods is available.
 
+Interactive `/login` runs in headless mode by default by setting `BROWSER=echo`
+and `CI=1` for the Copilot login subprocess. In Emacs this should display a
+copyable device-flow URL and code, for example `https://github.com/login/device`.
+Set `COPILOT_LOGIN_HEADLESS=0` if you explicitly want Copilot CLI to try opening
+a local browser.
+
 ## Emacs `agent-shell.el`
 
 `agent-shell` uses newline-delimited JSON for ACP traffic. The adapter auto-detects
@@ -77,6 +85,16 @@ built-in `--acp` mode:
         "COPILOT_TRANSPORT=prompt"
         "COPILOT_ARGS=[\"--allow-all-tools\",\"--silent\",\"--no-color\"]"))
 ```
+
+For token auth, add this to the environment list:
+
+```elisp
+(add-to-list 'agent-shell-github-environment
+             "COPILOT_GITHUB_TOKEN=github_pat_...")
+```
+
+Restart any existing Copilot agent-shell buffer/process after changing this
+configuration.
 
 Then run:
 
