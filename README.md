@@ -1,0 +1,74 @@
+# Copilot ACP Adapter
+
+Dependency-free Node adapter that exposes an ACP v1 JSON-RPC/stdio interface and forwards prompts, including Copilot slash commands, to the configured GitHub Copilot CLI.
+
+The adapter keeps the slash-command surface explicit so clients such as Emacs `agent-shell.el` can discover commands even when they do not implement Copilot's native terminal UI.
+
+## Usage
+
+```sh
+npm start
+```
+
+By default the adapter runs the installed Copilot CLI in non-interactive mode:
+`copilot --allow-all-tools --silent --no-color -p <prompt>`.
+
+Install the official GitHub Copilot CLI first:
+
+```sh
+curl -fsSL https://gh.io/copilot-install | PREFIX="$HOME/.local" bash
+export PATH="$HOME/.local/bin:$PATH"
+copilot --version
+```
+
+This adapter has been smoke-tested with GitHub Copilot CLI `1.0.69`.
+
+Configuration is environment-based:
+
+```sh
+COPILOT_COMMAND=$HOME/.local/bin/copilot
+COPILOT_ARGS='["--allow-all-tools", "--silent", "--no-color"]'
+COPILOT_TRANSPORT=prompt # prompt, stdin, argv, or command
+GITHUB_ENTERPRISE_HOST=ghe.example.com
+COPILOT_GITHUB_TOKEN=...
+```
+
+## ACP Methods
+
+- `initialize`: returns `protocolVersion: 1`, `agentCapabilities`, `agentInfo`, and `authMethods`.
+- `authenticate`: supports `github.com`, `github-enterprise`, and `api-key` method IDs.
+- `newSession` or `session/new`: creates a session and returns `sessionId`.
+- `prompt` or `session/prompt`: forwards prompt text to Copilot, preserving slash commands, and emits output through `session/update`.
+- `session/close`: drops adapter-side session state.
+- `session/cancel`: accepted for clients that send cancellation notifications.
+- `_commands/list`: extension method returning the adapter command catalog.
+
+`prompt` accepts `prompt`, `text`, or `content` params.
+
+## Login
+
+The adapter advertises ACP `authMethods` and also intercepts `/login`:
+
+- `/login github` or `/login github.com`: runs `copilot login --host https://github.com`.
+- `/login enterprise ghe.example.com`: runs `copilot login --host https://ghe.example.com`.
+- `/login api-key <token>`: stores the token in this adapter process for subsequent Copilot calls.
+
+API keys can also be supplied with `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`.
+
+Unauthenticated prompt execution will fail until one of those auth methods is available.
+
+## Slash Commands
+
+All commands from `AGENTS.md` are listed and passed through:
+
+- Agent Environment: `/init`, `/agent`, `/skills`, `/mcp`, `/plugin`
+- Agents/Subagents: `/model`, `/delegate`, `/fleet`, `/autopilot`, `/tasks`
+- Code: `/ide`, `/diff`, `/pr`, `/review`, `/security-review`, `/rubber-duck`, `/lsp`, `/terminal-setup`
+- Permissions: `/allow-all`, `/add-dir`, `/list-dirs`, `/cwd`, `/reset-allowed-tools`
+- Session: `/resume`, `/rename`, `/context`, `/usage`, `/session`, `/compact`, `/share`, `/remote`, `/copy`, `/rewind`
+- Help: `/help`, `/changelog`, `/feedback`, `/diagnose`, `/theme`, `/statusline`, `/footer`, `/update`, `/version`, `/experimental`, `/memory`, `/clear`, `/instructions`, `/app`
+- Other: `/ask`, `/chronicle`, `/env`, `/exit`, `/keep-alive`, `/limits`, `/login`, `/logout`, `/new`, `/plan`, `/research`, `/restart`, `/search`, `/settings`, `/subagents`, `/user`, `/voice`
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

@@ -1,0 +1,17 @@
+{
+  "name": "copilot-acp-adapter",
+  "version": "0.1.0",
+  "description": "ACP stdio adapter for GitHub Copilot CLI with slash-command passthrough.",
+  "type": "module",
+  "bin": {
+    "copilot-acp-adapter": "./bin/copilot-acp-adapter.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "start": "node ./bin/copilot-acp-adapter.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "Apache-2.0"
+}

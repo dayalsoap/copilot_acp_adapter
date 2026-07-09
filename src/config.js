@@ -1,0 +1,67 @@
+import { cwd } from "node:process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+export function loadConfig(env = process.env) {
+  return {
+    copilotCommand: env.COPILOT_COMMAND || defaultCopilotCommand(),
+    copilotArgs: parseArgs(env.COPILOT_ARGS || "--allow-all-tools --silent --no-color"),
+    copilotTransport: env.COPILOT_TRANSPORT || "prompt",
+    cwd: env.COPILOT_CWD || cwd(),
+    githubHost: normalizeHost(env.GITHUB_HOST || "https://github.com"),
+    enterpriseHost: env.GITHUB_ENTERPRISE_HOST || env.GHE_HOST || "",
+    apiKey:
+      env.GITHUB_COPILOT_API_KEY ||
+      env.COPILOT_GITHUB_TOKEN ||
+      env.GITHUB_TOKEN ||
+      env.GH_TOKEN ||
+      env.COPILOT_API_KEY ||
+      "",
+    ghCommand: env.GH_COMMAND || "gh",
+    requestTimeoutMs: Number(env.COPILOT_REQUEST_TIMEOUT_MS || 0),
+  };
+}
+
+function defaultCopilotCommand() {
+  const localBin = join(homedir(), ".local", "bin", "copilot");
+  return existsSync(localBin) ? localBin : "copilot";
+}
+
+export function normalizeHost(host) {
+  if (!host) {
+    return "";
+  }
+  return /^https?:\/\//.test(host) ? host : `https://${host}`;
+}
+
+export function parseArgs(value) {
+  if (Array.isArray(value)) {
+    return value.map(String);
+  }
+
+  const text = String(value || "").trim();
+  if (!text) {
+    return [];
+  }
+
+  if (text.startsWith("[")) {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) {
+      throw new Error("COPILOT_ARGS JSON value must be an array");
+    }
+    return parsed.map(String);
+  }
+
+  return text.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map(unquoteArg) || [];
+}
+
+function unquoteArg(arg) {
+  if (
+    (arg.startsWith('"') && arg.endsWith('"')) ||
+    (arg.startsWith("'") && arg.endsWith("'"))
+  ) {
+    return arg.slice(1, -1);
+  }
+  return arg;
+}
