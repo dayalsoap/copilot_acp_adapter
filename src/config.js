@@ -26,6 +26,10 @@ export function loadConfig(env = process.env) {
     loginHeadless: env.COPILOT_LOGIN_HEADLESS !== "0",
     forceTtyDirectCommands: env.COPILOT_FORCE_TTY_DIRECT_COMMANDS === "1",
     requestTimeoutMs: Number(env.COPILOT_REQUEST_TIMEOUT_MS || 0),
+    copilotHome: env.COPILOT_HOME || join(homedir(), ".copilot"),
+    copilotSettingsPath:
+      env.COPILOT_SETTINGS_PATH ||
+      join(env.COPILOT_HOME || join(homedir(), ".copilot"), "settings.json"),
   };
 }
 

@@ -92,6 +92,7 @@ const COMMAND_DESCRIPTIONS = Object.freeze({
   "/list-dirs": "List allowed workspace directories",
   "/plan": "Create or enter planning workflow",
   "/research": "Run research workflow",
+  "/settings": "Inspect or manage adapter-supported Copilot settings",
   "/ask": "Ask a question without applying changes",
   "/exit": "Exit the current Copilot session",
 });

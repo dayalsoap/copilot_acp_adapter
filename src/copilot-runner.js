@@ -161,6 +161,7 @@ export function isPtyWrapperFailure(result) {
     "inappropriate ioctl",
     "not a tty",
     "unexpected number of arguments",
+    "eperm",
   ].some((pattern) => output.includes(pattern));
 }
 

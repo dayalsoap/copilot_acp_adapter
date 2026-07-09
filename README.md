@@ -155,9 +155,22 @@ All commands from `AGENTS.md` are advertised to the ACP client:
 
 Routing is adapter-owned rather than a proxy to `copilot --acp`:
 
-- Adapter-native: `/help`, `/model`, `/autopilot`, `/cwd`, `/add-dir`, `/list-dirs`, `/allow-all`, `/reset-allowed-tools`, `/resume`, `/rename`, `/session`, `/new`, `/clear`, `/login`, `/logout`, and `/exit`.
+- Adapter-native: `/help`, `/model`, `/autopilot`, `/cwd`, `/add-dir`, `/list-dirs`, `/allow-all`, `/reset-allowed-tools`, `/resume`, `/rename`, `/session`, `/new`, `/clear`, `/login`, `/logout`, `/settings`, `/subagents`, and `/exit`.
 - Direct Copilot CLI subcommands: `/init`, `/skills`, `/mcp`, `/plugin`, `/update`, and `/version`.
 - Copilot prompt mode: remaining agent workflow commands such as `/review`, `/diff`, `/plan`, `/research`, `/delegate`, `/tasks`, and normal prompts.
+
+`/subagents` is implemented natively because Copilot exposes it only as an
+interactive UI command. The adapter reads and writes the documented Copilot
+settings shape at `COPILOT_SETTINGS_PATH` or `$COPILOT_HOME/settings.json`:
+
+```text
+/subagents
+/subagents explore
+/subagents set explore claude-sonnet-5 high long_context
+/subagents unset explore
+/settings subagents.agents.explore gpt-5.4
+/settings unset subagents.agents.explore
+```
 
 Prompt-mode calls include a stable `--session-id` for the ACP session so
 follow-up prompts share Copilot session state. `/new` and `/clear` rotate that

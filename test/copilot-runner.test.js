@@ -49,16 +49,26 @@ test("classifies socket ioctl failures as pty wrapper failures", () => {
     }),
     true,
   );
+  assert.equal(
+    isPtyWrapperFailure({
+      ok: false,
+      exitCode: null,
+      stdout: "",
+      stderr: "",
+      error: "spawn script EPERM",
+    }),
+    true,
+  );
 });
 
-test("forceTty falls back to direct command when script wrapper fails", async () => {
+test("forceTty runs direct command when pty wrapping is unavailable", async () => {
   const runner = new CopilotRunner({ cwd: process.cwd(), requestTimeoutMs: 0 });
   const result = await runner.runCommand(
-    process.execPath,
-    ["-e", "process.stdout.write('fallback-ok')"],
+    "/bin/echo",
+    ["fallback-ok"],
     {
       forceTty: true,
-      env: { COPILOT_SCRIPT_STYLE: "bsd" },
+      env: { COPILOT_SCRIPT_STYLE: "none" },
     },
   );
 

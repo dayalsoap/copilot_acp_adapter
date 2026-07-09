@@ -12,6 +12,15 @@ import {
   parseCommandArgs,
   parseSlashCommand,
 } from "./commands.js";
+import {
+  getSetting,
+  listSubagentSettings,
+  readSettings,
+  setSetting,
+  subagentSettingPath,
+  unsetSetting,
+  writeSettings,
+} from "./settings.js";
 
 const DIRECT_COPILOT_COMMANDS = Object.freeze({
   "/init": { args: ["init"] },
@@ -97,6 +106,8 @@ export class CopilotAcpAdapter {
             "/clear",
             "/logout",
             "/exit",
+            "/settings",
+            "/subagents",
           ],
           directCopilotCommands: Object.keys(DIRECT_COPILOT_COMMANDS),
         },
@@ -259,6 +270,10 @@ export class CopilotAcpAdapter {
         this.sendText(session?.id, "ACP session closed in the adapter.");
         this.sessions.delete(session.id);
         return this.commandDone(slashCommand, { handledBy: "adapter" });
+      case "/subagents":
+        return this.handleSubagentsCommand(session, slashCommand);
+      case "/settings":
+        return this.handleSettingsCommand(session, slashCommand);
       default:
         return null;
     }
@@ -381,6 +396,133 @@ export class CopilotAcpAdapter {
     session.createdAt = new Date().toISOString();
     this.sendText(session?.id, `Started a fresh Copilot conversation: ${session.copilotSessionId}`);
     return this.commandDone(slashCommand, { handledBy: "adapter" });
+  }
+
+  handleSubagentsCommand(session, slashCommand) {
+    const args = parseCommandArgs(slashCommand.rawArgs);
+    const [first] = args;
+
+    if (!first || first === "list") {
+      this.sendText(session?.id, subagentsSummary(readSettings(this.config.copilotSettingsPath), this.config));
+      return this.commandDone(slashCommand, { handledBy: "adapter" });
+    }
+
+    if (["help", "--help", "-h"].includes(first)) {
+      this.sendText(session?.id, subagentsHelpText(this.config));
+      return this.commandDone(slashCommand, { handledBy: "adapter" });
+    }
+
+    if (["unset", "reset", "inherit"].includes(first)) {
+      const [agentName] = args.slice(1);
+      if (!agentName) {
+        this.sendText(session?.id, "Usage: `/subagents unset <agent-name>`");
+        return this.commandDone(slashCommand, { handledBy: "adapter", error: "missing agent" }, "error");
+      }
+      return this.updateSubagentSetting(session, slashCommand, agentName, null);
+    }
+
+    const [agentName, model, effortLevel = "inherit", contextTier = "inherit"] =
+      first === "set" ? args.slice(1) : args;
+
+    if (!agentName) {
+      this.sendText(session?.id, subagentsHelpText(this.config));
+      return this.commandDone(slashCommand, { handledBy: "adapter", error: "missing agent" }, "error");
+    }
+
+    if (!model) {
+      const settings = readSettings(this.config.copilotSettingsPath);
+      const value = getSetting(settings, subagentSettingPath(agentName));
+      this.sendText(session?.id, subagentDetail(agentName, value, this.config));
+      return this.commandDone(slashCommand, { handledBy: "adapter" });
+    }
+
+    return this.updateSubagentSetting(session, slashCommand, agentName, {
+      model,
+      effortLevel,
+      contextTier,
+    });
+  }
+
+  handleSettingsCommand(session, slashCommand) {
+    const args = parseCommandArgs(slashCommand.rawArgs);
+    const [key, ...valueParts] = args;
+
+    if (!key) {
+      this.sendText(
+        session?.id,
+        [
+          "Adapter settings support:",
+          "- `/settings subagents.agents.<agent-name>`",
+          "- `/settings subagents.agents.<agent-name> <model> [effortLevel] [contextTier]`",
+          "- `/settings unset subagents.agents.<agent-name>`",
+          `Settings file: ${this.config.copilotSettingsPath}`,
+        ].join("\n"),
+      );
+      return this.commandDone(slashCommand, { handledBy: "adapter" });
+    }
+
+    if (key === "unset") {
+      const [targetKey] = valueParts;
+      if (!isSupportedAdapterSetting(targetKey)) {
+        this.sendText(session?.id, `Adapter can only unset subagent settings, for example \`/settings unset subagents.agents.explore\`.`);
+        return this.commandDone(slashCommand, { handledBy: "adapter", error: "unsupported setting" }, "error");
+      }
+      return this.updateSetting(session, slashCommand, targetKey, undefined);
+    }
+
+    if (!isSupportedAdapterSetting(key)) {
+      this.sendText(
+        session?.id,
+        [
+          `The ACP adapter does not implement native handling for setting \`${key}\`.`,
+          "Forwarding `/settings` through non-interactive Copilot prompt mode causes the model to explain the command instead of executing the CLI UI.",
+          "Supported native setting path: `subagents.agents.<agent-name>`.",
+        ].join("\n"),
+      );
+      return this.commandDone(slashCommand, { handledBy: "adapter", error: "unsupported setting" }, "error");
+    }
+
+    if (!valueParts.length) {
+      const settings = readSettings(this.config.copilotSettingsPath);
+      const value = getSetting(settings, key);
+      this.sendText(session?.id, settingDetail(key, value, this.config));
+      return this.commandDone(slashCommand, { handledBy: "adapter" });
+    }
+
+    const [model, effortLevel = "inherit", contextTier = "inherit"] = valueParts;
+    return this.updateSetting(session, slashCommand, key, { model, effortLevel, contextTier });
+  }
+
+  updateSubagentSetting(session, slashCommand, agentName, value) {
+    if (!isValidSubagentName(agentName)) {
+      this.sendText(session?.id, `Invalid subagent name: ${agentName}`);
+      return this.commandDone(slashCommand, { handledBy: "adapter", error: "invalid agent" }, "error");
+    }
+    return this.updateSetting(session, slashCommand, subagentSettingPath(agentName), value);
+  }
+
+  updateSetting(session, slashCommand, key, value) {
+    const settings = readSettings(this.config.copilotSettingsPath);
+    if (value === undefined || value === null) {
+      unsetSetting(settings, key);
+      writeSettings(this.config.copilotSettingsPath, settings);
+      this.sendText(session?.id, `Unset ${key}. Copilot will inherit the parent session defaults.`);
+      return this.commandDone(slashCommand, { handledBy: "adapter", setting: key });
+    }
+
+    setSetting(settings, key, value);
+    writeSettings(this.config.copilotSettingsPath, settings);
+    this.sendText(
+      session?.id,
+      [
+        `Set ${key}:`,
+        `- model: ${value.model}`,
+        `- effortLevel: ${value.effortLevel}`,
+        `- contextTier: ${value.contextTier}`,
+        `Settings file: ${this.config.copilotSettingsPath}`,
+      ].join("\n"),
+    );
+    return this.commandDone(slashCommand, { handledBy: "adapter", setting: key });
   }
 
   async runDirectCopilotCommand(session, slashCommand) {
@@ -640,6 +782,7 @@ function commandHelpText(rawArgs) {
   }
   lines.push("");
   lines.push("Management commands such as /skills, /mcp, /plugin, /init, /update, and /version run direct Copilot CLI subcommands.");
+  lines.push("Interactive configuration commands such as /subagents are handled natively by the adapter where Copilot exposes settings.");
   lines.push("Agent workflow commands are forwarded to Copilot prompt mode with this ACP session's Copilot session id.");
   return lines.join("\n");
 }
@@ -666,11 +809,97 @@ function commandHelpRouting(name) {
       "/login",
       "/logout",
       "/exit",
+      "/settings",
+      "/subagents",
     ].includes(name)
   ) {
     return "Handled by the ACP adapter.";
   }
   return "Forwarded to Copilot prompt mode.";
+}
+
+function subagentsSummary(settings, config) {
+  const configured = Object.entries(listSubagentSettings(settings));
+  const lines = [
+    "Copilot subagent model settings:",
+    `Settings file: ${config.copilotSettingsPath}`,
+    "",
+  ];
+
+  if (!configured.length) {
+    lines.push("No per-subagent settings are configured. Subagents inherit the parent session model, effort level, and context tier.");
+    lines.push("");
+    lines.push("Common agent names: explore, general-purpose, code-review");
+  } else {
+    for (const [agentName, value] of configured) {
+      lines.push(formatSubagentSetting(agentName, value));
+    }
+  }
+
+  lines.push("");
+  lines.push("Usage:");
+  lines.push("- `/subagents <agent-name>`");
+  lines.push("- `/subagents set <agent-name> <model> [effortLevel] [contextTier]`");
+  lines.push("- `/subagents unset <agent-name>`");
+  return lines.join("\n");
+}
+
+function subagentDetail(agentName, value, config) {
+  if (!value) {
+    return [
+      `${subagentSettingPath(agentName)} is not configured.`,
+      "Copilot will inherit the parent session defaults.",
+      `Settings file: ${config.copilotSettingsPath}`,
+    ].join("\n");
+  }
+  return [formatSubagentSetting(agentName, value), `Settings file: ${config.copilotSettingsPath}`].join("\n");
+}
+
+function settingDetail(key, value, config) {
+  if (value === undefined) {
+    return [
+      `${key} is not configured.`,
+      `Settings file: ${config.copilotSettingsPath}`,
+    ].join("\n");
+  }
+  return [
+    `${key}:`,
+    JSON.stringify(value, null, 2),
+    `Settings file: ${config.copilotSettingsPath}`,
+  ].join("\n");
+}
+
+function subagentsHelpText(config) {
+  return [
+    "Configure default and per-agent subagent models without opening Copilot's interactive UI.",
+    "",
+    "Usage:",
+    "- `/subagents`",
+    "- `/subagents <agent-name>`",
+    "- `/subagents set <agent-name> <model> [effortLevel] [contextTier]`",
+    "- `/subagents <agent-name> <model> [effortLevel] [contextTier]`",
+    "- `/subagents unset <agent-name>`",
+    "",
+    "Each omitted effortLevel or contextTier is stored as `inherit`.",
+    `Settings file: ${config.copilotSettingsPath}`,
+  ].join("\n");
+}
+
+function formatSubagentSetting(agentName, value) {
+  return [
+    `${agentName}:`,
+    `- model: ${value?.model || "inherit"}`,
+    `- effortLevel: ${value?.effortLevel || "inherit"}`,
+    `- contextTier: ${value?.contextTier || "inherit"}`,
+  ].join("\n");
+}
+
+function isSupportedAdapterSetting(key) {
+  return /^subagents\.agents\.[A-Za-z0-9_-]+$/.test(String(key || ""));
+}
+
+function isValidSubagentName(agentName) {
+  return /^[A-Za-z0-9_-]+$/.test(String(agentName || ""));
 }
 
 function sessionSummary(session) {

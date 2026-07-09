@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { CopilotAcpAdapter } from "../src/adapter.js";
 
 function createAdapter() {
+  const settingsDir = mkdtempSync(join(tmpdir(), "copilot-acp-settings-"));
   const calls = [];
   const notifications = [];
   const runner = {
@@ -34,13 +38,14 @@ function createAdapter() {
       apiKey: "",
       loginBrowser: "echo",
       loginHeadless: true,
+      copilotSettingsPath: join(settingsDir, "settings.json"),
     },
     runner,
     notify(method, params) {
       notifications.push({ method, params });
     },
   });
-  return { adapter, runner, notifications };
+  return { adapter, runner, notifications, settingsPath: join(settingsDir, "settings.json") };
 }
 
 test("initialize exposes ACP v1 capabilities and auth methods", async () => {
@@ -133,6 +138,66 @@ test("agent workflow slash commands still pass through prompt mode", async () =>
   assert.equal(runner.calls[0].type, "prompt");
   assert.equal(runner.calls[0].prompt, "/review");
   assert.equal(result._meta.command.name, "/review");
+});
+
+test("subagents command is handled natively instead of prompt mode", async () => {
+  const { adapter, runner, notifications } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/subagents",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(runner.calls.length, 0);
+  assert.equal(result._meta.handledBy, "adapter");
+  assert.equal(
+    notifications.some(
+      (notification) =>
+        notification.method === "session/update" &&
+        notification.params.update.content?.text.includes("Copilot subagent model settings"),
+    ),
+    true,
+  );
+});
+
+test("subagents command writes Copilot settings shape", async () => {
+  const { adapter, runner, settingsPath } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/subagents set explore claude-sonnet-5 high long_context",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(runner.calls.length, 0);
+  assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
+    subagents: {
+      agents: {
+        explore: {
+          model: "claude-sonnet-5",
+          effortLevel: "high",
+          contextTier: "long_context",
+        },
+      },
+    },
+  });
+});
+
+test("settings subagent bridge can unset a configured agent", async () => {
+  const { adapter, settingsPath } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+
+  await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/settings subagents.agents.code-review gpt-5.4",
+  });
+  await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/settings unset subagents.agents.code-review",
+  });
+
+  assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {});
 });
 
 test("native directory commands update session prompt args", async () => {
