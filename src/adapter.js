@@ -37,6 +37,10 @@ export class CopilotAcpAdapter {
         return this.newSession(params);
       case "session/close":
         return this.closeSession(params);
+      case "session/set_model":
+        return this.setModel(params);
+      case "session/set_mode":
+        return this.setMode(params);
       case "prompt":
       case "session/prompt":
         return this.prompt(params);
@@ -79,15 +83,22 @@ export class CopilotAcpAdapter {
 
   newSession(params = {}) {
     const sessionId = params.sessionId || randomUUID();
-    this.sessions.set(sessionId, {
+    const session = {
       id: sessionId,
       cwd: params.cwd || this.config.cwd,
       additionalDirectories: params.additionalDirectories || [],
       env: {},
+      modelId: this.config.copilotModel || "auto",
+      modeId: normalizeModeId(this.config.copilotMode || "agent"),
       createdAt: new Date().toISOString(),
-    });
+    };
+    this.sessions.set(sessionId, session);
     this.sendAvailableCommands(sessionId);
-    return { sessionId };
+    return {
+      sessionId,
+      models: sessionModels(session, this.config),
+      modes: sessionModes(session),
+    };
   }
 
   closeSession(params = {}) {
@@ -114,6 +125,7 @@ export class CopilotAcpAdapter {
     const result = await this.runner.runPrompt(prompt, {
       cwd: session?.cwd || this.config.cwd,
       env: { ...this.globalEnv, ...(session?.env || {}) },
+      copilotArgs: buildPromptArgs(this.config.copilotArgs || [], session),
     });
 
     this.sendOutput(sessionId, result);
@@ -127,6 +139,29 @@ export class CopilotAcpAdapter {
         error: result.error,
       },
     };
+  }
+
+  setModel(params = {}) {
+    const session = this.sessions.get(params.sessionId);
+    if (session) {
+      session.modelId = params.modelId || session.modelId;
+    }
+    return {};
+  }
+
+  setMode(params = {}) {
+    const session = this.sessions.get(params.sessionId);
+    if (session) {
+      session.modeId = normalizeModeId(params.modeId || session.modeId);
+      this.notify("session/update", {
+        sessionId: session.id,
+        update: {
+          sessionUpdate: "current_mode_update",
+          currentModeId: session.modeId,
+        },
+      });
+    }
+    return {};
   }
 
   async authenticate(params = {}) {
@@ -286,4 +321,107 @@ function extractPromptText(params) {
       .join("");
   }
   return "";
+}
+
+function sessionModels(session, config) {
+  const currentModelId = session.modelId || "auto";
+  return {
+    currentModelId,
+    availableModels: [
+      {
+        modelId: currentModelId,
+        name: config.copilotModelName || modelDisplayName(currentModelId),
+        description:
+          currentModelId === "auto"
+            ? "Copilot chooses the model automatically"
+            : "Configured Copilot model",
+      },
+    ],
+  };
+}
+
+function sessionModes(session) {
+  return {
+    currentModeId: session.modeId || "agent",
+    availableModes: [
+      {
+        id: "agent",
+        name: "Agent",
+        description: "Default Copilot agent mode",
+      },
+      {
+        id: "plan",
+        name: "Plan",
+        description: "Plan before making changes",
+      },
+      {
+        id: "autopilot",
+        name: "Autopilot",
+        description: "Continue autonomously where possible",
+      },
+    ],
+  };
+}
+
+function modelDisplayName(modelId) {
+  if (!modelId || modelId === "auto") {
+    return "Auto";
+  }
+
+  return modelId
+    .split(/[-_.\s]+/)
+    .filter(Boolean)
+    .map((part) => {
+      if (/^gpt$/i.test(part)) {
+        return "GPT";
+      }
+      return part.charAt(0).toUpperCase() + part.slice(1);
+    })
+    .join(" ");
+}
+
+function normalizeModeId(modeId) {
+  if (modeId === "interactive" || !modeId) {
+    return "agent";
+  }
+  return modeId;
+}
+
+function modeCliValue(modeId) {
+  if (modeId === "agent") {
+    return "interactive";
+  }
+  return modeId;
+}
+
+function buildPromptArgs(baseArgs, session) {
+  const args = stripOption(baseArgs, "--model");
+  const modeStripped = stripOption(args, "--mode");
+  const result = [...modeStripped];
+
+  if (session?.modelId && session.modelId !== "auto") {
+    result.push("--model", session.modelId);
+  }
+
+  if (session?.modeId && session.modeId !== "agent") {
+    result.push("--mode", modeCliValue(session.modeId));
+  }
+
+  return result;
+}
+
+function stripOption(args, option) {
+  const result = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === option) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith(`${option}=`)) {
+      continue;
+    }
+    result.push(arg);
+  }
+  return result;
 }

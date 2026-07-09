@@ -29,6 +29,9 @@ Configuration is environment-based:
 COPILOT_COMMAND=$HOME/.local/bin/copilot
 COPILOT_ARGS='["--allow-all-tools", "--silent", "--no-color"]'
 COPILOT_TRANSPORT=prompt # prompt, stdin, argv, or command
+COPILOT_MODEL=auto
+COPILOT_MODEL_NAME=Auto
+COPILOT_MODE=agent # agent, plan, or autopilot
 GITHUB_ENTERPRISE_HOST=ghe.example.com
 COPILOT_GITHUB_TOKEN=...
 COPILOT_LOGIN_BROWSER=echo
@@ -86,6 +89,21 @@ built-in `--acp` mode:
         "COPILOT_TRANSPORT=prompt"
         "COPILOT_ARGS=[\"--allow-all-tools\",\"--silent\",\"--no-color\"]"))
 ```
+
+To show model and mode in the `agent-shell` header, set the model explicitly:
+
+```elisp
+(add-to-list 'agent-shell-github-environment
+             "COPILOT_MODEL=claude-sonnet-5")
+(add-to-list 'agent-shell-github-environment
+             "COPILOT_MODEL_NAME=Claude Sonnet 5")
+```
+
+The adapter passes `COPILOT_MODEL` to Copilot as `--model <id>` for prompts.
+If `COPILOT_MODEL=auto`, the header shows `Auto`; the adapter cannot know which
+server-side model Copilot eventually picks unless Copilot exposes that choice.
+The session mode defaults to `Agent` and can be changed from the `agent-shell`
+mode menu when available.
 
 By default, `agent-shell` starts sessions at the project root. To start Copilot
 in the current Emacs `default-directory` instead, for example after `M-x cd` into

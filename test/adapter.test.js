@@ -21,6 +21,10 @@ function createAdapter() {
     config: {
       cwd: "/tmp",
       copilotCommand: "/home/jai/.local/bin/copilot",
+      copilotArgs: ["--allow-all-tools", "--model", "ignored-base-model"],
+      copilotModel: "claude-sonnet-5",
+      copilotModelName: "Claude Sonnet 5",
+      copilotMode: "agent",
       githubHost: "https://github.com",
       enterpriseHost: "",
       apiKey: "",
@@ -41,6 +45,42 @@ test("initialize exposes ACP v1 capabilities and auth methods", async () => {
   assert.equal(result.protocolVersion, 1);
   assert.equal(result.agentCapabilities._meta.slashCommandPassthrough, true);
   assert.equal(result.authMethods.some((method) => method.id === "github-enterprise"), true);
+});
+
+test("session/new exposes model and mode metadata for agent-shell header", async () => {
+  const { adapter } = createAdapter();
+  const result = await adapter.handle("session/new", { cwd: "/repo" });
+
+  assert.equal(result.models.currentModelId, "claude-sonnet-5");
+  assert.equal(result.models.availableModels[0].name, "Claude Sonnet 5");
+  assert.equal(result.modes.currentModeId, "agent");
+  assert.equal(result.modes.availableModes.some((mode) => mode.id === "plan"), true);
+});
+
+test("session model and mode changes affect subsequent Copilot args", async () => {
+  const { adapter, runner } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", {});
+
+  await adapter.handle("session/set_model", {
+    sessionId,
+    modelId: "gpt-5.4",
+  });
+  await adapter.handle("session/set_mode", {
+    sessionId,
+    modeId: "plan",
+  });
+  await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "hello",
+  });
+
+  assert.deepEqual(runner.calls[0].options.copilotArgs, [
+    "--allow-all-tools",
+    "--model",
+    "gpt-5.4",
+    "--mode",
+    "plan",
+  ]);
 });
 
 test("prompt passes slash commands through to Copilot runner", async () => {

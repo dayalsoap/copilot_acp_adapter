@@ -8,6 +8,9 @@ export function loadConfig(env = process.env) {
     copilotCommand: env.COPILOT_COMMAND || defaultCopilotCommand(),
     copilotArgs: parseArgs(env.COPILOT_ARGS || "--allow-all-tools --silent --no-color"),
     copilotTransport: env.COPILOT_TRANSPORT || "prompt",
+    copilotModel: env.COPILOT_MODEL || findArgValue(parseArgs(env.COPILOT_ARGS || ""), "--model") || "auto",
+    copilotModelName: env.COPILOT_MODEL_NAME || "",
+    copilotMode: env.COPILOT_MODE || findArgValue(parseArgs(env.COPILOT_ARGS || ""), "--mode") || "agent",
     cwd: env.COPILOT_CWD || cwd(),
     githubHost: normalizeHost(env.GITHUB_HOST || "https://github.com"),
     enterpriseHost: env.GITHUB_ENTERPRISE_HOST || env.GHE_HOST || "",
@@ -23,6 +26,19 @@ export function loadConfig(env = process.env) {
     loginHeadless: env.COPILOT_LOGIN_HEADLESS !== "0",
     requestTimeoutMs: Number(env.COPILOT_REQUEST_TIMEOUT_MS || 0),
   };
+}
+
+export function findArgValue(args, name) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === name) {
+      return args[index + 1] || "";
+    }
+    if (arg.startsWith(`${name}=`)) {
+      return arg.slice(name.length + 1);
+    }
+  }
+  return "";
 }
 
 function defaultCopilotCommand() {

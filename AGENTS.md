@@ -77,6 +77,8 @@ Relevant environment variables:
 - `COPILOT_COMMAND`: override Copilot executable.
 - `COPILOT_ARGS`: shell-like string or JSON array; defaults to `--allow-all-tools --silent --no-color`.
 - `COPILOT_TRANSPORT`: `prompt` by default; also supports `stdin`, `argv`, and `command`.
+- `COPILOT_MODEL` / `COPILOT_MODEL_NAME`: model id/display name surfaced to `agent-shell` and passed as `--model` when not `auto`.
+- `COPILOT_MODE`: initial session mode for `agent-shell`; supported display values are `agent`, `plan`, and `autopilot`.
 - `GITHUB_ENTERPRISE_HOST` or `GHE_HOST`: Enterprise host for `/login enterprise`.
 - `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`: token auth for headless use.
 - `COPILOT_REQUEST_TIMEOUT_MS`: optional subprocess timeout.
@@ -97,6 +99,7 @@ Relevant environment variables:
 - Confirm exact ACP schema compatibility against the target Emacs `agent-shell.el` client. The adapter intentionally supports common aliases like `newSession`/`session/new` and `prompt`/`session/prompt`, but the client may require stricter names or update shapes.
 - `acp.el` uses newline-delimited JSON, not `Content-Length` framing. The adapter now auto-detects incoming framing and replies with newline JSON for Emacs clients.
 - `agent-shell` defaults `agent-shell-cwd` to the project root. To start in the current Emacs directory, set `agent-shell-cwd-function` to `(lambda () default-directory)` before starting the shell.
+- The richer `agent-shell` header comes from `session/new` `models` and `modes` fields. The adapter displays the configured model/mode, but cannot discover Copilot's server-selected `auto` model unless Copilot exposes it.
 - Validate whether running every slash command through `copilot -p "/command"` behaves like interactive slash commands. If some commands require a persistent TTY session, the runner will need a persistent interactive Copilot process instead of one subprocess per prompt.
 - Add integration tests once authentication is available. Start with `/help`, `/skills`, `/agent`, `/mcp`, and a plain prompt.
 - Replace generic command descriptions in `src/commands.js` with the exact text from `copilot help commands` if client UX needs richer command menus.
