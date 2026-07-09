@@ -1,8 +1,12 @@
 # Copilot ACP Adapter
 
-Dependency-free Node adapter that exposes an ACP v1 JSON-RPC/stdio interface and forwards prompts, including Copilot slash commands, to the configured GitHub Copilot CLI.
+Dependency-free Node adapter that exposes an ACP v1 JSON-RPC/stdio interface for the configured GitHub Copilot CLI.
 
-The adapter keeps the slash-command surface explicit so clients such as Emacs `agent-shell.el` can discover commands even when they do not implement Copilot's native terminal UI.
+The adapter keeps the slash-command surface explicit so clients such as Emacs
+`agent-shell.el` can discover commands even when they do not implement Copilot's
+native terminal UI. It handles ACP/session commands itself, maps Copilot
+management commands to real CLI subcommands, and forwards agent workflow
+commands to Copilot prompt mode.
 
 ## Usage
 
@@ -43,7 +47,7 @@ COPILOT_LOGIN_HEADLESS=1
 - `initialize`: returns `protocolVersion: 1`, `agentCapabilities`, `agentInfo`, and `authMethods`.
 - `authenticate`: supports `github.com`, `github-enterprise`, and `api-key` method IDs.
 - `newSession` or `session/new`: creates a session and returns `sessionId`.
-- `prompt` or `session/prompt`: forwards prompt text to Copilot, preserving slash commands, and emits output through `session/update`.
+- `prompt` or `session/prompt`: routes slash commands or forwards prompt text to Copilot, emitting output through `session/update`.
 - `session/close`: drops adapter-side session state.
 - `session/cancel`: accepted for clients that send cancellation notifications.
 - `_commands/list`: extension method returning the adapter command catalog.
@@ -137,7 +141,7 @@ the adapter replies to `initialize` and `session/new`.
 
 ## Slash Commands
 
-All commands from `AGENTS.md` are listed and passed through:
+All commands from `AGENTS.md` are advertised to the ACP client:
 
 - Agent Environment: `/init`, `/agent`, `/skills`, `/mcp`, `/plugin`
 - Agents/Subagents: `/model`, `/delegate`, `/fleet`, `/autopilot`, `/tasks`
@@ -146,6 +150,17 @@ All commands from `AGENTS.md` are listed and passed through:
 - Session: `/resume`, `/rename`, `/context`, `/usage`, `/session`, `/compact`, `/share`, `/remote`, `/copy`, `/rewind`
 - Help: `/help`, `/changelog`, `/feedback`, `/diagnose`, `/theme`, `/statusline`, `/footer`, `/update`, `/version`, `/experimental`, `/memory`, `/clear`, `/instructions`, `/app`
 - Other: `/ask`, `/chronicle`, `/env`, `/exit`, `/keep-alive`, `/limits`, `/login`, `/logout`, `/new`, `/plan`, `/research`, `/restart`, `/search`, `/settings`, `/subagents`, `/user`, `/voice`
+
+Routing is adapter-owned rather than a proxy to `copilot --acp`:
+
+- Adapter-native: `/help`, `/model`, `/autopilot`, `/cwd`, `/add-dir`, `/list-dirs`, `/allow-all`, `/reset-allowed-tools`, `/resume`, `/rename`, `/session`, `/new`, `/clear`, `/login`, `/logout`, and `/exit`.
+- Direct Copilot CLI subcommands: `/init`, `/skills`, `/mcp`, `/plugin`, `/update`, and `/version`.
+- Copilot prompt mode: remaining agent workflow commands such as `/review`, `/diff`, `/plan`, `/research`, `/delegate`, `/tasks`, and normal prompts.
+
+Prompt-mode calls include a stable `--session-id` for the ACP session so
+follow-up prompts share Copilot session state. `/new` and `/clear` rotate that
+Copilot session id; `/resume <id>` switches subsequent prompts to an existing
+Copilot session or task id.
 
 ## License
 

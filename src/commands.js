@@ -111,6 +111,15 @@ export function parseSlashCommand(input) {
   };
 }
 
+export function parseCommandArgs(rawArgs) {
+  const text = String(rawArgs || "").trim();
+  if (!text) {
+    return [];
+  }
+
+  return text.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map(unquoteArg) || [];
+}
+
 export function listCommands() {
   return COMMANDS.map((command) => ({ ...command }));
 }
@@ -123,4 +132,14 @@ export function listAvailableCommands() {
       `Run Copilot ${command.group.toLowerCase()} command ${command.name}`,
     input: { hint: "optional command arguments" },
   }));
+}
+
+function unquoteArg(arg) {
+  if (
+    (arg.startsWith('"') && arg.endsWith('"')) ||
+    (arg.startsWith("'") && arg.endsWith("'"))
+  ) {
+    return arg.slice(1, -1);
+  }
+  return arg;
 }

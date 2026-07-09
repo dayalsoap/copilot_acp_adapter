@@ -13,7 +13,11 @@ function createAdapter() {
     },
     async runCommand(command, args, options) {
       calls.push({ type: "command", command, args, options });
-      options.onStdout?.("To authenticate, visit https://github.com/login/device and enter code ABCD-1234.\n");
+      if (args[0] === "login") {
+        options.onStdout?.("To authenticate, visit https://github.com/login/device and enter code ABCD-1234.\n");
+      } else {
+        options.onStdout?.(`command: ${args.join(" ")}\n`);
+      }
       return { ok: true, exitCode: 0, stdout: "logged in", stderr: "" };
     },
   };
@@ -80,21 +84,25 @@ test("session model and mode changes affect subsequent Copilot args", async () =
     "gpt-5.4",
     "--mode",
     "plan",
+    "--session-id",
+    sessionId,
   ]);
 });
 
-test("prompt passes slash commands through to Copilot runner", async () => {
+test("direct Copilot commands use CLI subcommands instead of prompt mode", async () => {
   const { adapter, runner, notifications } = createAdapter();
   const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
   const result = await adapter.handle("session/prompt", {
     sessionId,
-    prompt: "/skills list",
+    prompt: "/skills",
   });
 
   assert.equal(result.stopReason, "end_turn");
-  assert.equal(runner.calls[0].type, "prompt");
-  assert.equal(runner.calls[0].prompt, "/skills list");
+  assert.equal(runner.calls[0].type, "command");
+  assert.deepEqual(runner.calls[0].args, ["skill", "list"]);
+  assert.equal(runner.calls[0].options.forceTty, true);
   assert.equal(result._meta.command.name, "/skills");
+  assert.equal(result._meta.handledBy, "copilot-command");
   assert.equal(
     notifications.some(
       (notification) =>
@@ -107,7 +115,46 @@ test("prompt passes slash commands through to Copilot runner", async () => {
     notifications.some(
       (notification) =>
         notification.method === "session/update" &&
-        notification.params.update.content?.text === "ran: /skills list",
+        notification.params.update.content?.text === "command: skill list\n",
+    ),
+    true,
+  );
+});
+
+test("agent workflow slash commands still pass through prompt mode", async () => {
+  const { adapter, runner } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/review",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(runner.calls[0].type, "prompt");
+  assert.equal(runner.calls[0].prompt, "/review");
+  assert.equal(result._meta.command.name, "/review");
+});
+
+test("native directory commands update session prompt args", async () => {
+  const { adapter, runner, notifications } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+
+  await adapter.handle("session/prompt", { sessionId, prompt: "/cwd src" });
+  await adapter.handle("session/prompt", { sessionId, prompt: "/add-dir ../shared" });
+  await adapter.handle("session/prompt", { sessionId, prompt: "hello" });
+
+  assert.equal(runner.calls[0].options.cwd, "/repo/src");
+  assert.deepEqual(runner.calls[0].options.copilotArgs.slice(-4), [
+    "--add-dir",
+    "/repo/shared",
+    "--session-id",
+    sessionId,
+  ]);
+  assert.equal(
+    notifications.some(
+      (notification) =>
+        notification.method === "session/update" &&
+        notification.params.update.content?.text.includes("Working directory set to /repo/src"),
     ),
     true,
   );

@@ -36,9 +36,12 @@ export class CopilotRunner {
 
   runCommand(command, args, options = {}) {
     const config = { ...this.config, ...options };
+    const commandConfig = options.forceTty
+      ? buildPtyCommand(command, args)
+      : { command, args };
     return runProcess({
-      command,
-      args,
+      command: commandConfig.command,
+      args: commandConfig.args,
       input: options.input || "",
       cwd: config.cwd,
       env: { ...process.env, ...(options.env || {}) },
@@ -123,4 +126,25 @@ export function runProcess({ command, args, input, cwd, env, timeoutMs, onStdout
     }
     child.stdin.end();
   });
+}
+
+function buildPtyCommand(command, args) {
+  return {
+    command: "script",
+    args: [
+      "-q",
+      "-e",
+      "-c",
+      [command, ...args].map(shellQuote).join(" "),
+      "/dev/null",
+    ],
+  };
+}
+
+function shellQuote(value) {
+  const text = String(value);
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(text)) {
+    return text;
+  }
+  return `'${text.replaceAll("'", "'\\''")}'`;
 }
