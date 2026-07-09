@@ -128,7 +128,7 @@ test("session/list returns stored conversations for the requested cwd", async ()
   ]);
 });
 
-test("session/load resumes prompts with selected Copilot session id", async () => {
+test("session/load resumes prompts with Copilot resume flag", async () => {
   const { adapter, runner, sessionStateDir } = createAdapter();
   writeStoredWorkspace(sessionStateDir, "stored-session", {
     cwd: "/repo",
@@ -148,10 +148,8 @@ test("session/load resumes prompts with selected Copilot session id", async () =
 
   assert.equal(loaded.sessionId, "stored-session");
   assert.equal(loaded.cwd, "/repo");
-  assert.deepEqual(runner.calls[0].options.copilotArgs.slice(-2), [
-    "--session-id",
-    "stored-session",
-  ]);
+  assert.deepEqual(runner.calls[0].options.copilotArgs.slice(-1), ["--resume=stored-session"]);
+  assert.equal(runner.calls[0].options.copilotArgs.includes("--session-id"), false);
 });
 
 test("session model and mode changes affect subsequent Copilot args", async () => {
@@ -436,6 +434,17 @@ test("native directory commands update session prompt args", async () => {
     ),
     true,
   );
+});
+
+test("resume command uses Copilot resume flag for subsequent prompts", async () => {
+  const { adapter, runner } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+
+  await adapter.handle("session/prompt", { sessionId, prompt: "/resume existing-session" });
+  await adapter.handle("session/prompt", { sessionId, prompt: "hello" });
+
+  assert.deepEqual(runner.calls[0].options.copilotArgs.slice(-1), ["--resume=existing-session"]);
+  assert.equal(runner.calls[0].options.copilotArgs.includes("--session-id"), false);
 });
 
 test("login api-key stores env in the session", async () => {

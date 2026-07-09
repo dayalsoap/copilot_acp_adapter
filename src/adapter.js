@@ -139,6 +139,7 @@ export class CopilotAcpAdapter {
       modelId: this.config.copilotModel || "auto",
       modeId: normalizeModeId(this.config.copilotMode || "agent"),
       copilotSessionId: params.copilotSessionId || sessionId,
+      resumeExisting: false,
       name: params.name || "",
       allowAll: false,
       createdAt: new Date().toISOString(),
@@ -186,6 +187,7 @@ export class CopilotAcpAdapter {
       modelId: this.config.copilotModel || "auto",
       modeId: normalizeModeId(this.config.copilotMode || "agent"),
       copilotSessionId: sessionId,
+      resumeExisting: true,
       name: stored?.title || params.name || "",
       allowAll: false,
       createdAt: new Date().toISOString(),
@@ -433,6 +435,7 @@ export class CopilotAcpAdapter {
     }
 
     session.copilotSessionId = target;
+    session.resumeExisting = true;
     this.sendText(session?.id, `Subsequent prompts will use Copilot session ${target}.`);
     return this.commandDone(slashCommand, { handledBy: "adapter" });
   }
@@ -451,6 +454,7 @@ export class CopilotAcpAdapter {
 
   handleNewCommand(session, slashCommand) {
     session.copilotSessionId = randomUUID();
+    session.resumeExisting = false;
     session.createdAt = new Date().toISOString();
     this.sendText(session?.id, `Started a fresh Copilot conversation: ${session.copilotSessionId}`);
     return this.commandDone(slashCommand, { handledBy: "adapter" });
@@ -1114,7 +1118,8 @@ function buildPromptArgs(baseArgs, session) {
   const args = stripOption(baseArgs, "--model");
   const modeStripped = stripOption(args, "--mode");
   const sessionStripped = stripOption(modeStripped, "--session-id");
-  const addDirStripped = stripOption(sessionStripped, "--add-dir");
+  const resumeStripped = stripOption(sessionStripped, "--resume");
+  const addDirStripped = stripOption(resumeStripped, "--add-dir");
   const result = stripFlag(addDirStripped, "--continue");
 
   if (session?.modelId && session.modelId !== "auto") {
@@ -1133,7 +1138,9 @@ function buildPromptArgs(baseArgs, session) {
     result.push("--add-dir", directory);
   }
 
-  if (session?.copilotSessionId) {
+  if (session?.resumeExisting && session?.copilotSessionId) {
+    result.push(`--resume=${session.copilotSessionId}`);
+  } else if (session?.copilotSessionId) {
     result.push("--session-id", session.copilotSessionId);
   }
 

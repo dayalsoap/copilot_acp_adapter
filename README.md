@@ -172,7 +172,7 @@ conversation metadata from `$COPILOT_HOME/session-state` or
 `COPILOT_SESSION_STATE_PATH`. `session/list` mirrors Copilot's ACP behavior by
 returning completed conversations whose stored workspace `cwd` matches the
 requested cwd. `session/load` maps the selected id to subsequent Copilot prompt
-calls via `--session-id`.
+calls via `--resume=<id>`.
 
 `/subagents` is implemented natively because Copilot exposes it only as an
 interactive UI command. The adapter discovers project-defined agents from
@@ -195,10 +195,10 @@ git-root fallback for project skills. It checks `.github/skills/`,
 `.agents/skills/`, and `.claude/skills/`. Other `/skills` subcommands are
 delegated to the Copilot CLI.
 
-Prompt-mode calls include a stable `--session-id` for the ACP session so
+Prompt-mode calls for new adapter sessions include a stable `--session-id` so
 follow-up prompts share Copilot session state. `/new` and `/clear` rotate that
-Copilot session id; `/resume <id>` switches subsequent prompts to an existing
-Copilot session or task id.
+Copilot session id. Loaded conversations and `/resume <id>` use Copilot's
+`--resume=<id>` path so turns append to the existing conversation.
 
 Direct Copilot CLI subcommands use ordinary subprocess pipes by default. If a
 future Copilot command only emits useful output from a terminal, set
