@@ -24,6 +24,7 @@ export function loadConfig(env = process.env) {
     ghCommand: env.GH_COMMAND || "gh",
     loginBrowser: env.COPILOT_LOGIN_BROWSER || "echo",
     loginHeadless: env.COPILOT_LOGIN_HEADLESS !== "0",
+    forceTtyDirectCommands: env.COPILOT_FORCE_TTY_DIRECT_COMMANDS === "1",
     requestTimeoutMs: Number(env.COPILOT_REQUEST_TIMEOUT_MS || 0),
   };
 }

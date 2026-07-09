@@ -40,7 +40,8 @@ GITHUB_ENTERPRISE_HOST=ghe.example.com
 COPILOT_GITHUB_TOKEN=...
 COPILOT_LOGIN_BROWSER=echo
 COPILOT_LOGIN_HEADLESS=1
-COPILOT_SCRIPT_STYLE=auto # auto-detect, or force util-linux, bsd, none
+COPILOT_FORCE_TTY_DIRECT_COMMANDS=0
+COPILOT_SCRIPT_STYLE=auto # only used when forcing TTY direct commands
 ```
 
 ## ACP Methods
@@ -163,12 +164,13 @@ follow-up prompts share Copilot session state. `/new` and `/clear` rotate that
 Copilot session id; `/resume <id>` switches subsequent prompts to an existing
 Copilot session or task id.
 
-Direct Copilot CLI subcommands run through `script` when available because some
-Copilot management commands only emit useful output from a terminal. The adapter
-auto-detects util-linux and BSD/macOS `script` syntax. If auto-detection picks
-the wrong implementation in your editor environment, set
-`COPILOT_SCRIPT_STYLE=util-linux`, `COPILOT_SCRIPT_STYLE=bsd`, or
-`COPILOT_SCRIPT_STYLE=none`.
+Direct Copilot CLI subcommands use ordinary subprocess pipes by default. If a
+future Copilot command only emits useful output from a terminal, set
+`COPILOT_FORCE_TTY_DIRECT_COMMANDS=1` to run those commands through `script`.
+The adapter auto-detects util-linux and BSD/macOS `script` syntax, and falls
+back to plain subprocess execution if `script` fails with terminal/ioctl errors.
+You can override detection with `COPILOT_SCRIPT_STYLE=util-linux`,
+`COPILOT_SCRIPT_STYLE=bsd`, or `COPILOT_SCRIPT_STYLE=none`.
 
 ## License
 

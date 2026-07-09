@@ -100,7 +100,7 @@ test("direct Copilot commands use CLI subcommands instead of prompt mode", async
   assert.equal(result.stopReason, "end_turn");
   assert.equal(runner.calls[0].type, "command");
   assert.deepEqual(runner.calls[0].args, ["skill", "list"]);
-  assert.equal(runner.calls[0].options.forceTty, true);
+  assert.equal(runner.calls[0].options.forceTty, false);
   assert.equal(result._meta.command.name, "/skills");
   assert.equal(result._meta.handledBy, "copilot-command");
   assert.equal(

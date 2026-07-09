@@ -398,7 +398,7 @@ export class CopilotAcpAdapter {
         ...this.globalEnv,
         ...(session?.env || {}),
       },
-      forceTty: true,
+      forceTty: Boolean(this.config.forceTtyDirectCommands),
       timeoutMs: this.config.requestTimeoutMs,
       onStdout: (text) => {
         streamed = true;

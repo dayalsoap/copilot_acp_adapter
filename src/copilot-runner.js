@@ -34,15 +34,33 @@ export class CopilotRunner {
     });
   }
 
-  runCommand(command, args, options = {}) {
+  async runCommand(command, args, options = {}) {
     const config = { ...this.config, ...options };
     const env = { ...process.env, ...(options.env || {}) };
-    const commandConfig = options.forceTty
-      ? buildPtyCommand(command, args, env) || { command, args }
-      : { command, args };
+
+    if (options.forceTty) {
+      const ptyCommand = buildPtyCommand(command, args, env);
+      if (ptyCommand) {
+        const ptyResult = await runProcess({
+          command: ptyCommand.command,
+          args: ptyCommand.args,
+          input: options.input || "",
+          cwd: config.cwd,
+          env,
+          timeoutMs: Number(options.timeoutMs ?? config.requestTimeoutMs ?? 0),
+        });
+
+        if (!isPtyWrapperFailure(ptyResult)) {
+          options.onStdout?.(ptyResult.stdout);
+          options.onStderr?.(ptyResult.stderr);
+          return ptyResult;
+        }
+      }
+    }
+
     return runProcess({
-      command: commandConfig.command,
-      args: commandConfig.args,
+      command,
+      args,
       input: options.input || "",
       cwd: config.cwd,
       env,
@@ -127,6 +145,23 @@ export function runProcess({ command, args, input, cwd, env, timeoutMs, onStdout
     }
     child.stdin.end();
   });
+}
+
+export function isPtyWrapperFailure(result) {
+  if (result.ok) {
+    return false;
+  }
+
+  const output = `${result.stdout || ""}\n${result.stderr || ""}\n${result.error || ""}`.toLowerCase();
+  return [
+    "illegal option",
+    "tcgetattr",
+    "ioctl",
+    "operation not supported on socket",
+    "inappropriate ioctl",
+    "not a tty",
+    "unexpected number of arguments",
+  ].some((pattern) => output.includes(pattern));
 }
 
 export function buildPtyCommand(command, args, env = process.env) {

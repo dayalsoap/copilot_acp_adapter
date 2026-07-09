@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildPtyCommand, detectScriptStyle } from "../src/copilot-runner.js";
+import { CopilotRunner, buildPtyCommand, detectScriptStyle, isPtyWrapperFailure } from "../src/copilot-runner.js";
 
 test("builds util-linux script command when requested", () => {
   assert.deepEqual(
@@ -37,4 +37,31 @@ test("can disable script pty wrapping", () => {
 
 test("detectScriptStyle honors explicit override", () => {
   assert.equal(detectScriptStyle({ COPILOT_SCRIPT_STYLE: "bsd" }), "bsd");
+});
+
+test("classifies socket ioctl failures as pty wrapper failures", () => {
+  assert.equal(
+    isPtyWrapperFailure({
+      ok: false,
+      exitCode: 1,
+      stdout: "",
+      stderr: "tcgetattr/ioctl: operation not supported on socket",
+    }),
+    true,
+  );
+});
+
+test("forceTty falls back to direct command when script wrapper fails", async () => {
+  const runner = new CopilotRunner({ cwd: process.cwd(), requestTimeoutMs: 0 });
+  const result = await runner.runCommand(
+    process.execPath,
+    ["-e", "process.stdout.write('fallback-ok')"],
+    {
+      forceTty: true,
+      env: { COPILOT_SCRIPT_STYLE: "bsd" },
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.match(result.stdout, /fallback-ok/);
 });
