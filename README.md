@@ -155,13 +155,19 @@ All commands from `AGENTS.md` are advertised to the ACP client:
 
 Routing is adapter-owned rather than a proxy to `copilot --acp`:
 
-- Adapter-native: `/help`, `/model`, `/autopilot`, `/cwd`, `/add-dir`, `/list-dirs`, `/allow-all`, `/reset-allowed-tools`, `/resume`, `/rename`, `/session`, `/new`, `/clear`, `/login`, `/logout`, `/settings`, `/subagents`, and `/exit`.
-- Direct Copilot CLI subcommands: `/init`, `/skills`, `/mcp`, `/plugin`, `/update`, and `/version`.
+- Adapter-native: `/help`, `/model`, `/autopilot`, `/cwd`, `/add-dir`, `/list-dirs`, `/allow-all`, `/reset-allowed-tools`, `/resume`, `/rename`, `/session`, `/new`, `/clear`, `/login`, `/logout`, `/settings`, `/skills` project listing, `/subagents`, and `/exit`.
+- Direct Copilot CLI subcommands: `/init`, `/skills add/remove/list --json`, `/mcp`, `/plugin`, `/update`, and `/version`.
 - Copilot prompt mode: remaining agent workflow commands such as `/review`, `/diff`, `/plan`, `/research`, `/delegate`, `/tasks`, and normal prompts.
+
+`session/new`'s `cwd` parameter is treated as the client-provided working
+directory. In Emacs agent-shell, this is controlled by
+`agent-shell-cwd-function`; when the client does not send a cwd, the adapter
+uses its startup directory.
 
 `/subagents` is implemented natively because Copilot exposes it only as an
 interactive UI command. The adapter discovers project-defined agents from
-`.github/agents` at the session cwd's git root, then overlays the documented
+`.github/agents` under the session cwd first. If none are found there, it falls
+back to `.github/agents` at the git root. It then overlays the documented
 per-agent model settings from `COPILOT_SETTINGS_PATH` or
 `$COPILOT_HOME/settings.json`:
 
@@ -173,6 +179,11 @@ per-agent model settings from `COPILOT_SETTINGS_PATH` or
 /settings subagents.agents.explore gpt-5.4
 /settings unset subagents.agents.explore
 ```
+
+`/skills` with no arguments, or `/skills list`, uses the same cwd-first then
+git-root fallback for project skills. It checks `.github/skills/`,
+`.agents/skills/`, and `.claude/skills/`. Other `/skills` subcommands are
+delegated to the Copilot CLI.
 
 Prompt-mode calls include a stable `--session-id` for the ACP session so
 follow-up prompts share Copilot session state. `/new` and `/clear` rotate that

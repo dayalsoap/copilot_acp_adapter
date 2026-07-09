@@ -12,7 +12,7 @@ import {
   parseCommandArgs,
   parseSlashCommand,
 } from "./commands.js";
-import { discoverProjectAgents } from "./project-agents.js";
+import { discoverProjectAgents, discoverProjectSkills } from "./project-agents.js";
 import {
   getSetting,
   listSubagentSettings,
@@ -216,6 +216,13 @@ export class CopilotAcpAdapter {
     if (slashCommand.name === "/help") {
       this.sendText(session?.id, commandHelpText(slashCommand.rawArgs));
       return this.commandDone(slashCommand, { handledBy: "adapter" });
+    }
+
+    if (slashCommand.name === "/skills") {
+      const skillsResult = this.handleSkillsCommand(session, slashCommand);
+      if (skillsResult) {
+        return skillsResult;
+      }
     }
 
     if (DIRECT_COPILOT_COMMANDS[slashCommand.name]) {
@@ -446,6 +453,17 @@ export class CopilotAcpAdapter {
       effortLevel,
       contextTier,
     });
+  }
+
+  handleSkillsCommand(session, slashCommand) {
+    const args = parseCommandArgs(slashCommand.rawArgs);
+    if (args.length > 1 || (args[0] && args[0] !== "list")) {
+      return null;
+    }
+
+    const projectSkills = discoverProjectSkills(session?.cwd || this.config.cwd);
+    this.sendText(session?.id, skillsSummary(projectSkills));
+    return this.commandDone(slashCommand, { handledBy: "adapter" });
   }
 
   handleSettingsCommand(session, slashCommand) {
@@ -823,6 +841,29 @@ function commandHelpRouting(name) {
   return "Forwarded to Copilot prompt mode.";
 }
 
+function skillsSummary(projectSkills) {
+  const lines = [
+    "Copilot project skills:",
+    `Search root: ${projectSkills.searchRoot}`,
+    "Skill directories:",
+    ...projectSkills.skillsDirs.map((directory) => `- ${directory}`),
+    "",
+  ];
+
+  if (!projectSkills.skills.length) {
+    lines.push("No project skills were found in the session cwd. No git-root fallback skills were found either.");
+  } else {
+    for (const skill of projectSkills.skills) {
+      lines.push(formatProjectResource(skill));
+    }
+  }
+
+  lines.push("");
+  lines.push("Project skill lookup checks the session cwd first, then falls back to the git root only if no cwd project skills are found.");
+  lines.push("Use `/skills add`, `/skills remove`, or `/skills list --json` to delegate to the Copilot CLI.");
+  return lines.join("\n");
+}
+
 function subagentsSummary(settings, config, projectAgents) {
   const configured = listSubagentSettings(settings);
   const projectByName = new Map(projectAgents.agents.map((agent) => [agent.name, agent]));
@@ -908,6 +949,17 @@ function formatSubagentSetting(agentName, value, projectAgent) {
   ];
   if (projectAgent?.description) {
     lines.splice(2, 0, `- description: ${projectAgent.description}`);
+  }
+  return lines.join("\n");
+}
+
+function formatProjectResource(resource) {
+  const lines = [
+    `${resource.name}:`,
+    `- source: ${resource.relativePath}`,
+  ];
+  if (resource.description) {
+    lines.push(`- description: ${resource.description}`);
   }
   return lines.join("\n");
 }

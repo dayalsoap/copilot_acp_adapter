@@ -99,14 +99,14 @@ test("direct Copilot commands use CLI subcommands instead of prompt mode", async
   const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
   const result = await adapter.handle("session/prompt", {
     sessionId,
-    prompt: "/skills",
+    prompt: "/mcp",
   });
 
   assert.equal(result.stopReason, "end_turn");
   assert.equal(runner.calls[0].type, "command");
-  assert.deepEqual(runner.calls[0].args, ["skill", "list"]);
+  assert.deepEqual(runner.calls[0].args, ["mcp", "list"]);
   assert.equal(runner.calls[0].options.forceTty, false);
-  assert.equal(result._meta.command.name, "/skills");
+  assert.equal(result._meta.command.name, "/mcp");
   assert.equal(result._meta.handledBy, "copilot-command");
   assert.equal(
     notifications.some(
@@ -120,10 +120,55 @@ test("direct Copilot commands use CLI subcommands instead of prompt mode", async
     notifications.some(
       (notification) =>
         notification.method === "session/update" &&
-        notification.params.update.content?.text === "command: skill list\n",
+        notification.params.update.content?.text === "command: mcp list\n",
     ),
     true,
   );
+});
+
+test("skills list is handled natively from session cwd", async () => {
+  const { adapter, runner, notifications } = createAdapter();
+  const repo = mkdtempSync(join(tmpdir(), "copilot-acp-repo-"));
+  const nested = join(repo, "packages", "app");
+  mkdirSync(join(repo, ".git"));
+  mkdirSync(join(nested, ".github", "skills", "local-skill"), { recursive: true });
+  writeFileSync(
+    join(nested, ".github", "skills", "local-skill", "SKILL.md"),
+    "---\nname: local-skill\ndescription: Local skill\n---\n",
+  );
+
+  const { sessionId } = await adapter.handle("session/new", { cwd: nested });
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/skills",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(runner.calls.length, 0);
+  assert.equal(result._meta.handledBy, "adapter");
+  assert.equal(
+    notifications.some(
+      (notification) =>
+        notification.method === "session/update" &&
+        notification.params.update.content?.text.includes("local-skill:") &&
+        notification.params.update.content?.text.includes("source: .github/skills/local-skill/SKILL.md"),
+    ),
+    true,
+  );
+});
+
+test("skills management subcommands still use Copilot CLI", async () => {
+  const { adapter, runner } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/skills add ./my-skill",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(runner.calls[0].type, "command");
+  assert.deepEqual(runner.calls[0].args, ["skill", "add", "./my-skill"]);
+  assert.equal(result._meta.handledBy, "copilot-command");
 });
 
 test("agent workflow slash commands still pass through prompt mode", async () => {
@@ -213,6 +258,30 @@ test("subagents command lists project agents from git root", async () => {
     ),
     true,
   );
+});
+
+test("subagents command prefers cwd agents over git root agents", async () => {
+  const { adapter, notifications } = createAdapter();
+  const repo = mkdtempSync(join(tmpdir(), "copilot-acp-repo-"));
+  const nested = join(repo, "packages", "app");
+  mkdirSync(join(repo, ".git"));
+  mkdirSync(join(repo, ".github", "agents"), { recursive: true });
+  mkdirSync(join(nested, ".github", "agents"), { recursive: true });
+  writeFileSync(join(repo, ".github", "agents", "root-agent.md"), "description: Root agent\n");
+  writeFileSync(join(nested, ".github", "agents", "local-agent.md"), "description: Local agent\n");
+
+  const { sessionId } = await adapter.handle("session/new", { cwd: nested });
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/subagents",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  const message = notifications
+    .map((notification) => notification.params.update.content?.text || "")
+    .find((text) => text.includes("Copilot subagent model settings"));
+  assert.match(message, /local-agent:/);
+  assert.doesNotMatch(message, /root-agent:/);
 });
 
 test("subagents command shows project agent detail without settings", async () => {

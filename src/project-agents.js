@@ -2,37 +2,109 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 
 const AGENT_EXTENSIONS = new Set(["", ".json", ".md", ".markdown", ".yaml", ".yml"]);
+const SKILL_EXTENSIONS = new Set(["", ".md", ".markdown"]);
 
 export function discoverProjectAgents(cwd) {
-  const gitRoot = findGitRoot(cwd);
+  return discoverProjectResources(cwd, {
+    kind: "agent",
+    directories: [[".github", "agents"]],
+    extensions: AGENT_EXTENSIONS,
+  });
+}
+
+export function discoverProjectSkills(cwd) {
+  return discoverProjectResources(cwd, {
+    kind: "skill",
+    directories: [
+      [".github", "skills"],
+      [".agents", "skills"],
+      [".claude", "skills"],
+    ],
+    extensions: SKILL_EXTENSIONS,
+  });
+}
+
+function discoverProjectResources(cwd, { kind, directories, extensions }) {
+  const searchRoot = resolve(cwd || process.cwd());
+  const cwdResult = discoverResourcesInRoot(searchRoot, searchRoot, directories, extensions, kind);
+  if (cwdResult.resources.length > 0) {
+    return {
+      gitRoot: findGitRoot(searchRoot),
+      searchRoot,
+      directories: cwdResult.directories,
+      agentsDir: kind === "agent" ? cwdResult.directories[0] : "",
+      skillsDirs: kind === "skill" ? cwdResult.directories : [],
+      agents: kind === "agent" ? cwdResult.resources : [],
+      skills: kind === "skill" ? cwdResult.resources : [],
+    };
+  }
+
+  const gitRoot = findGitRoot(searchRoot);
   if (!gitRoot) {
-    return { gitRoot: "", agentsDir: "", agents: [] };
+    return {
+      gitRoot: "",
+      searchRoot,
+      directories: cwdResult.directories,
+      agentsDir: kind === "agent" ? cwdResult.directories[0] : "",
+      skillsDirs: kind === "skill" ? cwdResult.directories : [],
+      agents: [],
+      skills: [],
+    };
   }
 
-  const agentsDir = join(gitRoot, ".github", "agents");
-  if (!existsSync(agentsDir)) {
-    return { gitRoot, agentsDir, agents: [] };
+  if (gitRoot === searchRoot) {
+    return {
+      gitRoot,
+      searchRoot,
+      directories: cwdResult.directories,
+      agentsDir: kind === "agent" ? cwdResult.directories[0] : "",
+      skillsDirs: kind === "skill" ? cwdResult.directories : [],
+      agents: [],
+      skills: [],
+    };
   }
 
-  const agents = [];
-  for (const filePath of listAgentFiles(agentsDir)) {
-    const metadata = readAgentMetadata(filePath);
-    const fallbackName = basename(filePath, extname(filePath));
-    const name = normalizeAgentName(metadata.name) || normalizeAgentName(fallbackName);
-    if (!name) {
+  const gitRootResult = discoverResourcesInRoot(gitRoot, gitRoot, directories, extensions, kind);
+  return {
+    gitRoot,
+    searchRoot: gitRoot,
+    directories: gitRootResult.directories,
+    agentsDir: kind === "agent" ? gitRootResult.directories[0] : "",
+    skillsDirs: kind === "skill" ? gitRootResult.directories : [],
+    agents: kind === "agent" ? gitRootResult.resources : [],
+    skills: kind === "skill" ? gitRootResult.resources : [],
+  };
+}
+
+function discoverResourcesInRoot(root, relativeRoot, directoryParts, extensions, kind) {
+  const directories = directoryParts.map((parts) => join(root, ...parts));
+  const resources = [];
+
+  for (const directory of directories) {
+    if (!existsSync(directory)) {
       continue;
     }
-    agents.push({
-      name,
-      description: metadata.description || "",
-      path: filePath,
-      relativePath: relative(gitRoot, filePath),
-      source: "project",
-    });
+
+    for (const filePath of listResourceFiles(directory, extensions)) {
+      const metadata = readAgentMetadata(filePath);
+      const fallbackName = fallbackResourceName(filePath, kind);
+      const name = normalizeAgentName(metadata.name) || normalizeAgentName(fallbackName);
+      if (!name) {
+        continue;
+      }
+      resources.push({
+        name,
+        description: metadata.description || "",
+        path: filePath,
+        relativePath: relative(relativeRoot, filePath),
+        source: "project",
+        kind,
+      });
+    }
   }
 
-  agents.sort((left, right) => left.name.localeCompare(right.name));
-  return { gitRoot, agentsDir, agents };
+  resources.sort((left, right) => left.name.localeCompare(right.name));
+  return { directories, resources };
 }
 
 export function findGitRoot(startDir) {
@@ -53,25 +125,33 @@ export function findGitRoot(startDir) {
   }
 }
 
-function listAgentFiles(agentsDir) {
+function listResourceFiles(directory, extensions) {
   const files = [];
-  for (const entry of readdirSync(agentsDir, { withFileTypes: true })) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.name.startsWith(".")) {
       continue;
     }
-    const entryPath = join(agentsDir, entry.name);
+    const entryPath = join(directory, entry.name);
     if (entry.isDirectory()) {
-      files.push(...listAgentFiles(entryPath));
+      files.push(...listResourceFiles(entryPath, extensions));
       continue;
     }
     if (!entry.isFile()) {
       continue;
     }
-    if (AGENT_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
+    if (extensions.has(extname(entry.name).toLowerCase())) {
       files.push(entryPath);
     }
   }
   return files;
+}
+
+function fallbackResourceName(filePath, kind) {
+  const base = basename(filePath, extname(filePath));
+  if (kind === "skill" && base.toLowerCase() === "skill") {
+    return basename(dirname(filePath));
+  }
+  return base;
 }
 
 function readAgentMetadata(filePath) {
