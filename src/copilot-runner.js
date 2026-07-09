@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 export class CopilotRunner {
   constructor(config) {
@@ -36,15 +36,16 @@ export class CopilotRunner {
 
   runCommand(command, args, options = {}) {
     const config = { ...this.config, ...options };
+    const env = { ...process.env, ...(options.env || {}) };
     const commandConfig = options.forceTty
-      ? buildPtyCommand(command, args)
+      ? buildPtyCommand(command, args, env) || { command, args }
       : { command, args };
     return runProcess({
       command: commandConfig.command,
       args: commandConfig.args,
       input: options.input || "",
       cwd: config.cwd,
-      env: { ...process.env, ...(options.env || {}) },
+      env,
       timeoutMs: Number(options.timeoutMs ?? config.requestTimeoutMs ?? 0),
       onStdout: options.onStdout,
       onStderr: options.onStderr,
@@ -128,7 +129,19 @@ export function runProcess({ command, args, input, cwd, env, timeoutMs, onStdout
   });
 }
 
-function buildPtyCommand(command, args) {
+export function buildPtyCommand(command, args, env = process.env) {
+  const style = detectScriptStyle(env);
+  if (style === "none") {
+    return null;
+  }
+
+  if (style === "bsd") {
+    return {
+      command: "script",
+      args: ["-q", "/dev/null", command, ...args],
+    };
+  }
+
   return {
     command: "script",
     args: [
@@ -139,6 +152,33 @@ function buildPtyCommand(command, args) {
       "/dev/null",
     ],
   };
+}
+
+let cachedScriptStyle = null;
+
+export function detectScriptStyle(env = process.env) {
+  const override = env.COPILOT_SCRIPT_STYLE;
+  if (["util-linux", "bsd", "none"].includes(override)) {
+    return override;
+  }
+
+  if (cachedScriptStyle) {
+    return cachedScriptStyle;
+  }
+
+  const result = spawnSync("script", ["--help"], {
+    encoding: "utf8",
+    env,
+  });
+
+  if (result.error?.code === "ENOENT") {
+    cachedScriptStyle = "none";
+    return cachedScriptStyle;
+  }
+
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  cachedScriptStyle = output.includes("--command") ? "util-linux" : "bsd";
+  return cachedScriptStyle;
 }
 
 function shellQuote(value) {
