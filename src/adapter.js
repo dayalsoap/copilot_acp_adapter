@@ -182,6 +182,14 @@ export class CopilotAcpAdapter {
       };
     }
 
+    if (plan.type === "choose") {
+      this.sendText(session?.id, plan.message);
+      return {
+        stopReason: "end_turn",
+        _meta: { auth: "choose" },
+      };
+    }
+
     this.sendText(session?.id, plan.message);
     let streamed = false;
     const result = await this.runner.runCommand(plan.command, plan.args, {

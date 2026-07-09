@@ -83,6 +83,7 @@ Relevant environment variables:
 
 ### Auth Behavior
 
+- Bare `/login` shows login choices instead of assuming GitHub.com.
 - `/login github` and `/login github.com` run `copilot login --host https://github.com`.
 - `/login enterprise ghe.example.com` runs `copilot login --host https://ghe.example.com`.
 - `/login api-key <token>` stores the token in adapter session env as `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_TOKEN`.

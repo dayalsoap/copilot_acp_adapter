@@ -23,6 +23,15 @@ test("builds GitHub.com login command", () => {
   });
 });
 
+test("bare login asks the user to choose a login method", () => {
+  const login = parseLoginArgs("", config);
+  const command = buildGithubLoginCommand(login, config);
+  assert.equal(command.ok, true);
+  assert.equal(command.type, "choose");
+  assert.match(command.message, /\/login github/);
+  assert.match(command.message, /\/login enterprise <hostname>/);
+});
+
 test("builds GitHub Enterprise login command", () => {
   const login = parseLoginArgs("enterprise ghe.internal", config);
   const command = buildGithubLoginCommand(login, config);

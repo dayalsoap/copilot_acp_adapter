@@ -1,6 +1,14 @@
 export function parseLoginArgs(rawArgs, config) {
   const parts = String(rawArgs || "").trim().split(/\s+/).filter(Boolean);
-  const mode = parts[0] || "github";
+  const mode = parts[0] || "choose";
+
+  if (mode === "choose") {
+    return {
+      mode: "choose",
+      host: "",
+      token: "",
+    };
+  }
 
   if (mode === "enterprise" || mode === "ghe") {
     return {
@@ -61,6 +69,22 @@ export function listAuthMethods(config) {
 }
 
 export function buildGithubLoginCommand(login, config) {
+  if (login.mode === "choose") {
+    return {
+      type: "choose",
+      ok: true,
+      message: [
+        "Choose a Copilot login method:",
+        "",
+        "- `/login github` for GitHub.com",
+        "- `/login enterprise <hostname>` for GitHub Enterprise",
+        "- `/login api-key <token>` for headless token auth",
+        "",
+        "Enterprise host examples: `ghe.example.com` or `https://example.ghe.com`.",
+      ].join("\n"),
+    };
+  }
+
   if (login.mode === "api-key") {
     const token = login.token || config.apiKey;
     if (!token) {

@@ -51,6 +51,7 @@ COPILOT_LOGIN_HEADLESS=1
 
 The adapter advertises ACP `authMethods` and also intercepts `/login`:
 
+- `/login`: shows login choices without assuming a provider.
 - `/login github` or `/login github.com`: runs `copilot login --host https://github.com`.
 - `/login enterprise ghe.example.com`: runs `copilot login --host https://ghe.example.com`.
 - `/login api-key <token>`: stores the token in this adapter process for subsequent Copilot calls.
@@ -59,11 +60,11 @@ API keys can also be supplied with `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHU
 
 Unauthenticated prompt execution will fail until one of those auth methods is available.
 
-Interactive `/login` runs in headless mode by default by setting `BROWSER=echo`
-and `CI=1` for the Copilot login subprocess. In Emacs this should display a
-copyable device-flow URL and code, for example `https://github.com/login/device`.
-Set `COPILOT_LOGIN_HEADLESS=0` if you explicitly want Copilot CLI to try opening
-a local browser.
+Provider-specific login commands run in headless mode by default by setting
+`BROWSER=echo` and `CI=1` for the Copilot login subprocess. In Emacs this
+should display a copyable device-flow URL and code, for example
+`https://github.com/login/device`. Set `COPILOT_LOGIN_HEADLESS=0` if you
+explicitly want Copilot CLI to try opening a local browser.
 
 ## Emacs `agent-shell.el`
 

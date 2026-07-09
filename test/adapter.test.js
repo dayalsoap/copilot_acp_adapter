@@ -104,3 +104,23 @@ test("login github streams device-flow output to the session", async () => {
     true,
   );
 });
+
+test("bare login shows choices instead of assuming GitHub.com", async () => {
+  const { adapter, runner, notifications } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", {});
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/login",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(runner.calls.length, 0);
+  assert.equal(
+    notifications.some(
+      (notification) =>
+        notification.method === "session/update" &&
+        notification.params.update.content?.text.includes("/login enterprise <hostname>"),
+    ),
+    true,
+  );
+});
