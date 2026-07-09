@@ -160,8 +160,10 @@ Routing is adapter-owned rather than a proxy to `copilot --acp`:
 - Copilot prompt mode: remaining agent workflow commands such as `/review`, `/diff`, `/plan`, `/research`, `/delegate`, `/tasks`, and normal prompts.
 
 `/subagents` is implemented natively because Copilot exposes it only as an
-interactive UI command. The adapter reads and writes the documented Copilot
-settings shape at `COPILOT_SETTINGS_PATH` or `$COPILOT_HOME/settings.json`:
+interactive UI command. The adapter discovers project-defined agents from
+`.github/agents` at the session cwd's git root, then overlays the documented
+per-agent model settings from `COPILOT_SETTINGS_PATH` or
+`$COPILOT_HOME/settings.json`:
 
 ```text
 /subagents

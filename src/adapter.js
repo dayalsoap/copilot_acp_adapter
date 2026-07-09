@@ -12,6 +12,7 @@ import {
   parseCommandArgs,
   parseSlashCommand,
 } from "./commands.js";
+import { discoverProjectAgents } from "./project-agents.js";
 import {
   getSetting,
   listSubagentSettings,
@@ -401,9 +402,13 @@ export class CopilotAcpAdapter {
   handleSubagentsCommand(session, slashCommand) {
     const args = parseCommandArgs(slashCommand.rawArgs);
     const [first] = args;
+    const projectAgents = discoverProjectAgents(session?.cwd || this.config.cwd);
 
     if (!first || first === "list") {
-      this.sendText(session?.id, subagentsSummary(readSettings(this.config.copilotSettingsPath), this.config));
+      this.sendText(
+        session?.id,
+        subagentsSummary(readSettings(this.config.copilotSettingsPath), this.config, projectAgents),
+      );
       return this.commandDone(slashCommand, { handledBy: "adapter" });
     }
 
@@ -432,7 +437,7 @@ export class CopilotAcpAdapter {
     if (!model) {
       const settings = readSettings(this.config.copilotSettingsPath);
       const value = getSetting(settings, subagentSettingPath(agentName));
-      this.sendText(session?.id, subagentDetail(agentName, value, this.config));
+      this.sendText(session?.id, subagentDetail(agentName, value, this.config, projectAgents));
       return this.commandDone(slashCommand, { handledBy: "adapter" });
     }
 
@@ -818,21 +823,24 @@ function commandHelpRouting(name) {
   return "Forwarded to Copilot prompt mode.";
 }
 
-function subagentsSummary(settings, config) {
-  const configured = Object.entries(listSubagentSettings(settings));
+function subagentsSummary(settings, config, projectAgents) {
+  const configured = listSubagentSettings(settings);
+  const projectByName = new Map(projectAgents.agents.map((agent) => [agent.name, agent]));
+  const names = [...new Set([...projectByName.keys(), ...Object.keys(configured)])].sort();
   const lines = [
     "Copilot subagent model settings:",
     `Settings file: ${config.copilotSettingsPath}`,
+    `Project agents directory: ${projectAgents.agentsDir || "(no git root found)"}`,
     "",
   ];
 
-  if (!configured.length) {
-    lines.push("No per-subagent settings are configured. Subagents inherit the parent session model, effort level, and context tier.");
+  if (!names.length) {
+    lines.push("No project-defined or per-subagent settings are configured. Subagents inherit the parent session model, effort level, and context tier.");
     lines.push("");
     lines.push("Common agent names: explore, general-purpose, code-review");
   } else {
-    for (const [agentName, value] of configured) {
-      lines.push(formatSubagentSetting(agentName, value));
+    for (const agentName of names) {
+      lines.push(formatSubagentSetting(agentName, configured[agentName], projectByName.get(agentName)));
     }
   }
 
@@ -844,15 +852,20 @@ function subagentsSummary(settings, config) {
   return lines.join("\n");
 }
 
-function subagentDetail(agentName, value, config) {
-  if (!value) {
+function subagentDetail(agentName, value, config, projectAgents) {
+  const projectAgent = projectAgents.agents.find((agent) => agent.name === agentName);
+  if (!value && !projectAgent) {
     return [
       `${subagentSettingPath(agentName)} is not configured.`,
+      `No project agent named ${agentName} was found in ${projectAgents.agentsDir || "a git-root .github/agents directory"}.`,
       "Copilot will inherit the parent session defaults.",
       `Settings file: ${config.copilotSettingsPath}`,
     ].join("\n");
   }
-  return [formatSubagentSetting(agentName, value), `Settings file: ${config.copilotSettingsPath}`].join("\n");
+  return [
+    formatSubagentSetting(agentName, value, projectAgent),
+    `Settings file: ${config.copilotSettingsPath}`,
+  ].join("\n");
 }
 
 function settingDetail(key, value, config) {
@@ -885,13 +898,18 @@ function subagentsHelpText(config) {
   ].join("\n");
 }
 
-function formatSubagentSetting(agentName, value) {
-  return [
+function formatSubagentSetting(agentName, value, projectAgent) {
+  const lines = [
     `${agentName}:`,
+    `- source: ${projectAgent ? projectAgent.relativePath : "settings only"}`,
     `- model: ${value?.model || "inherit"}`,
     `- effortLevel: ${value?.effortLevel || "inherit"}`,
     `- contextTier: ${value?.contextTier || "inherit"}`,
-  ].join("\n");
+  ];
+  if (projectAgent?.description) {
+    lines.splice(2, 0, `- description: ${projectAgent.description}`);
+  }
+  return lines.join("\n");
 }
 
 function isSupportedAdapterSetting(key) {

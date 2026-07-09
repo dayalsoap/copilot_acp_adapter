@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -182,6 +182,62 @@ test("subagents command writes Copilot settings shape", async () => {
       },
     },
   });
+});
+
+test("subagents command lists project agents from git root", async () => {
+  const { adapter, runner, notifications } = createAdapter();
+  const repo = mkdtempSync(join(tmpdir(), "copilot-acp-repo-"));
+  const nested = join(repo, "packages", "app");
+  mkdirSync(join(repo, ".git"));
+  mkdirSync(join(repo, ".github", "agents"), { recursive: true });
+  mkdirSync(nested, { recursive: true });
+  writeFileSync(
+    join(repo, ".github", "agents", "explore.md"),
+    "---\nname: explore\ndescription: Explore the codebase\n---\n",
+  );
+
+  const { sessionId } = await adapter.handle("session/new", { cwd: nested });
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/subagents",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(runner.calls.length, 0);
+  assert.equal(
+    notifications.some(
+      (notification) =>
+        notification.method === "session/update" &&
+        notification.params.update.content?.text.includes("source: .github/agents/explore.md") &&
+        notification.params.update.content?.text.includes("description: Explore the codebase"),
+    ),
+    true,
+  );
+});
+
+test("subagents command shows project agent detail without settings", async () => {
+  const { adapter, notifications } = createAdapter();
+  const repo = mkdtempSync(join(tmpdir(), "copilot-acp-repo-"));
+  mkdirSync(join(repo, ".git"));
+  mkdirSync(join(repo, ".github", "agents"), { recursive: true });
+  writeFileSync(join(repo, ".github", "agents", "code-review.md"), "description: Review code changes\n");
+
+  const { sessionId } = await adapter.handle("session/new", { cwd: repo });
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/subagents code-review",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(
+    notifications.some(
+      (notification) =>
+        notification.method === "session/update" &&
+        notification.params.update.content?.text.includes("code-review:") &&
+        notification.params.update.content?.text.includes("model: inherit"),
+    ),
+    true,
+  );
 });
 
 test("settings subagent bridge can unset a configured agent", async () => {
