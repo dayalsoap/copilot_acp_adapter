@@ -117,8 +117,9 @@ The adapter passes `COPILOT_MODEL` to Copilot as `--model <id>` for prompts.
 If `COPILOT_MODEL=auto`, the header shows `Auto`; the adapter cannot know which
 server-side model Copilot eventually picks unless Copilot exposes that choice.
 Use `COPILOT_MODELS` as a comma-separated or JSON array override to skip native
-ACP discovery. If discovery fails or times out, the adapter falls back to its
-static Copilot CLI model catalog.
+ACP discovery. If discovery fails or times out, the adapter only advertises
+`auto` plus the current configured model, avoiding a broad static catalog that
+may include administrator-disabled models.
 The session mode defaults to `Agent` and can be changed from the `agent-shell`
 mode menu when available.
 

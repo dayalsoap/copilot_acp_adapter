@@ -1,18 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  DEFAULT_MODEL_IDS,
   listConfiguredModels,
   modelDisplayName,
   parseNativeAcpModelsOutput,
   parseModelCatalog,
 } from "../src/models.js";
 
-test("default model catalog includes Copilot CLI models", () => {
-  assert.equal(DEFAULT_MODEL_IDS.includes("auto"), true);
-  assert.equal(DEFAULT_MODEL_IDS.includes("claude-sonnet-5"), true);
-  assert.equal(DEFAULT_MODEL_IDS.includes("gpt-5.4"), true);
-  assert.equal(DEFAULT_MODEL_IDS.includes("gemini-3.5-flash"), true);
+test("empty model catalog parser returns only auto", () => {
+  assert.deepEqual(parseModelCatalog(""), ["auto"]);
 });
 
 test("model catalog parser supports comma-separated and JSON overrides", () => {
@@ -61,5 +57,18 @@ test("explicit model catalog override bypasses native discovery", () => {
       copilotCommand: "/does/not/exist",
     }),
     ["auto", "override-model"],
+  );
+});
+
+test("native discovery failure falls back to configured minimal catalog", () => {
+  assert.deepEqual(
+    listConfiguredModels({
+      copilotModelsOverride: false,
+      copilotModels: ["auto"],
+      copilotCommand: "/does/not/exist",
+      cwd: process.cwd(),
+      modelDiscoveryTimeoutMs: 1,
+    }),
+    ["auto"],
   );
 });

@@ -1,27 +1,5 @@
 import { spawnSync } from "node:child_process";
 
-export const DEFAULT_MODEL_IDS = Object.freeze([
-  "auto",
-  "claude-sonnet-5",
-  "claude-sonnet-4.6",
-  "claude-sonnet-4.5",
-  "claude-haiku-4.5",
-  "claude-fable-5",
-  "claude-opus-4.8",
-  "claude-opus-4.8-fast",
-  "claude-opus-4.7",
-  "claude-opus-4.6",
-  "claude-opus-4.5",
-  "gpt-5.5",
-  "gpt-5.4",
-  "gpt-5.3-codex",
-  "gpt-5.4-mini",
-  "gpt-5-mini",
-  "gemini-3.1-pro-preview",
-  "gemini-3.5-flash",
-  "kimi-k2.7-code",
-]);
-
 let cachedNativeModels = null;
 
 export function parseModelCatalog(value) {
@@ -31,7 +9,7 @@ export function parseModelCatalog(value) {
 
   const text = String(value || "").trim();
   if (!text) {
-    return [...DEFAULT_MODEL_IDS];
+    return ["auto"];
   }
 
   if (text.startsWith("[")) {
@@ -71,14 +49,19 @@ export function listConfiguredModels(config) {
     return cachedNativeModels;
   }
 
-  cachedNativeModels =
-    fetchNativeAcpModels({
-      command: config.copilotCommand,
-      cwd: config.cwd,
-      env: { COPILOT_AUTO_UPDATE: "false" },
-      timeoutMs: config.modelDiscoveryTimeoutMs,
-    }) || config.copilotModels;
-  return cachedNativeModels;
+  const nativeModels = fetchNativeAcpModels({
+    command: config.copilotCommand,
+    cwd: config.cwd,
+    env: { COPILOT_AUTO_UPDATE: "false" },
+    timeoutMs: config.modelDiscoveryTimeoutMs,
+  });
+
+  if (nativeModels) {
+    cachedNativeModels = nativeModels;
+    return cachedNativeModels;
+  }
+
+  return config.copilotModels;
 }
 
 export function fetchNativeAcpModels({ command, args = ["--acp", "--no-color"], cwd, env = {}, timeoutMs = 3000 }) {
@@ -139,7 +122,7 @@ export function parseNativeAcpModelsOutput(output) {
         );
       }
     } catch {
-      // Ignore non-JSON output from future CLI versions and fall back to the static catalog.
+      // Ignore non-JSON output from future CLI versions and use the configured fallback.
     }
   }
 

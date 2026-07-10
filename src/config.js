@@ -5,14 +5,16 @@ import { join } from "node:path";
 import { parseModelCatalog } from "./models.js";
 
 export function loadConfig(env = process.env) {
+  const copilotModelsOverride = Boolean(env.COPILOT_MODELS);
+
   return {
     copilotCommand: env.COPILOT_COMMAND || defaultCopilotCommand(),
     copilotArgs: parseArgs(env.COPILOT_ARGS || "--allow-all-tools --silent --no-color"),
     copilotTransport: env.COPILOT_TRANSPORT || "prompt",
     copilotModel: env.COPILOT_MODEL || findArgValue(parseArgs(env.COPILOT_ARGS || ""), "--model") || "auto",
     copilotModelName: env.COPILOT_MODEL_NAME || "",
-    copilotModels: parseModelCatalog(env.COPILOT_MODELS || ""),
-    copilotModelsOverride: Boolean(env.COPILOT_MODELS),
+    copilotModels: copilotModelsOverride ? parseModelCatalog(env.COPILOT_MODELS) : ["auto"],
+    copilotModelsOverride,
     modelDiscoveryTimeoutMs: Number(env.COPILOT_MODEL_DISCOVERY_TIMEOUT_MS || 3000),
     copilotMode: env.COPILOT_MODE || findArgValue(parseArgs(env.COPILOT_ARGS || ""), "--mode") || "agent",
     cwd: env.COPILOT_CWD || cwd(),
