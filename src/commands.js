@@ -82,6 +82,7 @@ const COMMAND_DESCRIPTIONS = Object.freeze({
   "/agents": "Inspect or manage agents",
   "/subagents": "Inspect or manage subagents",
   "/help": "Show Copilot command help",
+  "/changelog": "Display official Copilot CLI release notes",
   "/model": "Inspect or change the active model",
   "/review": "Request a code review",
   "/security-review": "Request a security-focused code review",

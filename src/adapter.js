@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
+import { DEFAULT_CHANGELOG_URL, fetchCopilotChangelog, selectChangelog } from "./changelog.js";
 import {
   buildGithubLoginCommand,
   listAuthMethods,
@@ -23,7 +24,7 @@ import {
   unsetSetting,
   writeSettings,
 } from "./settings.js";
-import { listStoredSessions, readStoredSession } from "./session-store.js";
+import { listStoredSessions, readStoredSession, readStoredTranscript } from "./session-store.js";
 
 const DIRECT_COPILOT_COMMANDS = Object.freeze({
   "/init": { args: ["init"] },
@@ -35,12 +36,14 @@ const DIRECT_COPILOT_COMMANDS = Object.freeze({
 });
 
 export class CopilotAcpAdapter {
-  constructor({ config, runner, notify = () => {} }) {
+  constructor({ config, runner, notify = () => {}, fetchImpl = globalThis.fetch }) {
     this.config = config;
     this.runner = runner;
     this.notify = notify;
     this.sessions = new Map();
     this.globalEnv = {};
+    this.fetchImpl = fetchImpl;
+    this.changelogPromise = null;
   }
 
   async handle(method, params = {}) {
@@ -194,6 +197,17 @@ export class CopilotAcpAdapter {
       createdAt: new Date().toISOString(),
     };
     this.sessions.set(sessionId, session);
+    for (const message of readStoredTranscript({
+      sessionStatePath: this.config.copilotSessionStatePath,
+      sessionId,
+    })) {
+      this.sendText(
+        sessionId,
+        message.text,
+        message.role === "user" ? "user_message_chunk" : "agent_message_chunk",
+        { replay: true },
+      );
+    }
     this.sendAvailableCommands(sessionId);
     return this.sessionStartResult(session);
   }
@@ -271,6 +285,10 @@ export class CopilotAcpAdapter {
       return this.commandDone(slashCommand, { handledBy: "adapter" });
     }
 
+    if (slashCommand.name === "/changelog") {
+      return this.handleChangelogCommand(session, slashCommand);
+    }
+
     if (slashCommand.name === "/skills") {
       const skillsResult = this.handleSkillsCommand(session, slashCommand);
       if (skillsResult) {
@@ -337,6 +355,42 @@ export class CopilotAcpAdapter {
         return this.handleSettingsCommand(session, slashCommand);
       default:
         return null;
+    }
+  }
+
+  async handleChangelogCommand(session, slashCommand) {
+    try {
+      this.changelogPromise ||= fetchCopilotChangelog({
+        fetchImpl: this.fetchImpl,
+        url: this.config.changelogUrl || DEFAULT_CHANGELOG_URL,
+        timeoutMs: this.config.changelogTimeoutMs || 5000,
+      }).catch((error) => {
+        this.changelogPromise = null;
+        throw error;
+      });
+      const selected = selectChangelog(await this.changelogPromise, slashCommand.rawArgs);
+
+      if (selected.summarize) {
+        const result = await this.runner.runPrompt(
+          `Summarize these official GitHub Copilot CLI release notes. Do not discuss the current repository:\n\n${selected.text}`,
+          {
+            cwd: session?.cwd || this.config.cwd,
+            env: { ...this.globalEnv, ...(session?.env || {}) },
+            copilotArgs: buildPromptArgs(this.config.copilotArgs || [], session),
+          },
+        );
+        this.sendOutput(session?.id, result);
+        return this.commandDone(slashCommand, { handledBy: "adapter", summarized: true }, result.ok ? "end_turn" : "error");
+      }
+
+      this.sendText(session?.id, selected.text);
+      return this.commandDone(slashCommand, { handledBy: "adapter" });
+    } catch (error) {
+      this.sendText(
+        session?.id,
+        `Could not load the Copilot CLI changelog: ${error.message}\n${this.config.changelogUrl || DEFAULT_CHANGELOG_URL}`,
+      );
+      return this.commandDone(slashCommand, { handledBy: "adapter", error: error.message }, "error");
     }
   }
 
@@ -872,6 +926,7 @@ function commandHelpRouting(name) {
   if (
     [
       "/help",
+      "/changelog",
       "/model",
       "/autopilot",
       "/cwd",

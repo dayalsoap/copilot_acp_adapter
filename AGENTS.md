@@ -82,6 +82,8 @@ Relevant environment variables:
 - `GITHUB_ENTERPRISE_HOST` or `GHE_HOST`: Enterprise host for `/login enterprise`.
 - `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`: token auth for headless use.
 - `COPILOT_REQUEST_TIMEOUT_MS`: optional subprocess timeout.
+- `COPILOT_CHANGELOG_URL`: optional override for the official Copilot CLI changelog source.
+- `COPILOT_CHANGELOG_TIMEOUT_MS`: changelog fetch timeout; defaults to 5000 ms.
 
 ### Auth Behavior
 

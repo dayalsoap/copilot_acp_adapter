@@ -59,6 +59,41 @@ export function readStoredSession({ sessionStatePath, sessionId }) {
   };
 }
 
+export function readStoredTranscript({ sessionStatePath, sessionId }) {
+  if (!sessionStatePath || !sessionId) {
+    return [];
+  }
+
+  const eventsPath = join(sessionStatePath, sessionId, "events.jsonl");
+  if (!existsSync(eventsPath)) {
+    return [];
+  }
+
+  const messages = [];
+  for (const line of readFileSync(eventsPath, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    const role = event.type === "user.message"
+      ? "user"
+      : event.type === "assistant.message"
+        ? "agent"
+        : null;
+    const text = messageText(event.data?.content);
+    if (role && text) {
+      messages.push({ role, text });
+    }
+  }
+  return messages;
+}
+
 export function parseWorkspace(text) {
   const result = {};
   for (const line of String(text || "").split(/\r?\n/)) {
@@ -84,4 +119,17 @@ function unquoteYamlScalar(value) {
     return text.slice(1, -1);
   }
   return text;
+}
+
+function messageText(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((part) => typeof part === "string" ? part : part?.type === "text" ? part.text : "")
+    .filter(Boolean)
+    .join("\n");
 }

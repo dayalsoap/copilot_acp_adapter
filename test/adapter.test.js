@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { CopilotAcpAdapter } from "../src/adapter.js";
 
-function createAdapter() {
+function createAdapter(options = {}) {
   const settingsDir = mkdtempSync(join(tmpdir(), "copilot-acp-settings-"));
   const sessionStateDir = mkdtempSync(join(tmpdir(), "copilot-acp-session-state-"));
   const calls = [];
@@ -45,6 +45,7 @@ function createAdapter() {
       copilotSessionStatePath: sessionStateDir,
     },
     runner,
+    fetchImpl: options.fetchImpl,
     notify(method, params) {
       notifications.push({ method, params });
     },
@@ -58,6 +59,19 @@ function createAdapter() {
   };
 }
 
+test("changelog is fetched directly instead of sent as a model prompt", async () => {
+  const { adapter, runner, notifications } = createAdapter({
+    fetchImpl: async () => ({ ok: true, text: async () => "# Changelog\n\n## 1.0.0\n\nFast.\n" }),
+  });
+  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+  const result = await adapter.handle("session/prompt", { sessionId, prompt: "/changelog" });
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(result._meta.handledBy, "adapter");
+  assert.equal(runner.calls.length, 0);
+  assert.equal(notifications.some((item) => item.params.update.content?.text.includes("Fast.")), true);
+});
+
 function writeStoredWorkspace(sessionStateDir, sessionId, fields) {
   const sessionDir = join(sessionStateDir, sessionId);
   mkdirSync(sessionDir, { recursive: true });
@@ -69,7 +83,8 @@ function writeStoredWorkspace(sessionStateDir, sessionId, fields) {
   ].filter(Boolean);
   writeFileSync(join(sessionDir, "workspace.yaml"), `${lines.join("\n")}\n`);
   const eventsPath = join(sessionDir, "events.jsonl");
-  writeFileSync(eventsPath, JSON.stringify({ type: "session.start" }) + "\n");
+  const events = fields.events || [{ type: "session.start" }];
+  writeFileSync(eventsPath, events.map((event) => JSON.stringify(event)).join("\n") + "\n");
   const updatedAt = new Date(fields.updated_at);
   utimesSync(eventsPath, updatedAt, updatedAt);
 }
@@ -138,11 +153,15 @@ test("session/list returns stored conversations for the requested cwd", async ()
 });
 
 test("session/load resumes prompts with Copilot resume flag", async () => {
-  const { adapter, runner, sessionStateDir } = createAdapter();
+  const { adapter, runner, notifications, sessionStateDir } = createAdapter();
   writeStoredWorkspace(sessionStateDir, "stored-session", {
     cwd: "/repo",
     name: "Stored session",
     updated_at: "2026-01-01T00:00:00.000Z",
+    events: [
+      { type: "user.message", data: { content: "Earlier question" } },
+      { type: "assistant.message", data: { content: "Earlier answer" } },
+    ],
   });
 
   const loaded = await adapter.handle("session/load", {
@@ -159,6 +178,13 @@ test("session/load resumes prompts with Copilot resume flag", async () => {
   assert.equal(loaded.cwd, "/repo");
   assert.deepEqual(runner.calls[0].options.copilotArgs.slice(-1), ["--resume=stored-session"]);
   assert.equal(runner.calls[0].options.copilotArgs.includes("--session-id"), false);
+  const replay = notifications
+    .filter((item) => item.params.update._meta?.replay)
+    .map((item) => [item.params.update.sessionUpdate, item.params.update.content.text]);
+  assert.deepEqual(replay, [
+    ["user_message_chunk", "Earlier question"],
+    ["agent_message_chunk", "Earlier answer"],
+  ]);
 });
 
 test("session model and mode changes affect subsequent Copilot args", async () => {

@@ -32,6 +32,8 @@ export function loadConfig(env = process.env) {
     loginHeadless: env.COPILOT_LOGIN_HEADLESS !== "0",
     forceTtyDirectCommands: env.COPILOT_FORCE_TTY_DIRECT_COMMANDS === "1",
     requestTimeoutMs: Number(env.COPILOT_REQUEST_TIMEOUT_MS || 0),
+    changelogUrl: env.COPILOT_CHANGELOG_URL || "",
+    changelogTimeoutMs: Number(env.COPILOT_CHANGELOG_TIMEOUT_MS || 5000),
     copilotHome: env.COPILOT_HOME || join(homedir(), ".copilot"),
     copilotSettingsPath:
       env.COPILOT_SETTINGS_PATH ||

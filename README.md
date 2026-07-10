@@ -44,6 +44,8 @@ COPILOT_LOGIN_BROWSER=echo
 COPILOT_LOGIN_HEADLESS=1
 COPILOT_FORCE_TTY_DIRECT_COMMANDS=0
 COPILOT_SCRIPT_STYLE=auto # only used when forcing TTY direct commands
+COPILOT_CHANGELOG_TIMEOUT_MS=5000
+# COPILOT_CHANGELOG_URL=https://raw.githubusercontent.com/github/copilot-cli/main/changelog.md
 COPILOT_SESSION_STATE_PATH=$HOME/.copilot/session-state
 ```
 
@@ -182,6 +184,9 @@ conversation metadata from `$COPILOT_HOME/session-state` or
 returning completed conversations whose stored workspace `cwd` matches the
 requested cwd. `session/load` maps the selected id to subsequent Copilot prompt
 calls via `--resume=<id>`.
+During `session/load`, the adapter also replays user and assistant messages from
+Copilot's `events.jsonl` as ACP history updates so clients can render the stored
+conversation before it continues.
 
 `/subagents` is implemented natively because Copilot exposes it only as an
 interactive UI command. The adapter discovers project-defined agents from
