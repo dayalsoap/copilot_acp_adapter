@@ -94,6 +94,32 @@ export function readStoredTranscript({ sessionStatePath, sessionId }) {
   return messages;
 }
 
+export function readStoredUsage({ sessionStatePath, sessionId }) {
+  if (!sessionStatePath || !sessionId) {
+    return null;
+  }
+  const eventsPath = join(sessionStatePath, sessionId, "events.jsonl");
+  if (!existsSync(eventsPath)) {
+    return null;
+  }
+
+  let latest = null;
+  for (const line of readFileSync(eventsPath, "utf8").split(/\r?\n/)) {
+    if (!line.includes('"type":"session.shutdown"')) {
+      continue;
+    }
+    try {
+      const event = JSON.parse(line);
+      if (event.type === "session.shutdown") {
+        latest = event.data || null;
+      }
+    } catch {
+      // Ignore a partial final event while Copilot is still writing it.
+    }
+  }
+  return latest;
+}
+
 export function parseWorkspace(text) {
   const result = {};
   for (const line of String(text || "").split(/\r?\n/)) {

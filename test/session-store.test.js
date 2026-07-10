@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { readStoredTranscript } from "../src/session-store.js";
+import { readStoredTranscript, readStoredUsage } from "../src/session-store.js";
 
 test("reads user and assistant messages from Copilot events", () => {
   const root = mkdtempSync(join(tmpdir(), "copilot-transcript-"));
@@ -20,4 +20,15 @@ test("reads user and assistant messages from Copilot events", () => {
     { role: "user", text: "hello" },
     { role: "agent", text: "hi" },
   ]);
+});
+
+test("reads the latest completed usage snapshot", () => {
+  const root = mkdtempSync(join(tmpdir(), "copilot-usage-"));
+  const session = join(root, "session-1");
+  mkdirSync(session);
+  writeFileSync(join(session, "events.jsonl"), [
+    JSON.stringify({ type: "session.shutdown", data: { currentTokens: 10 } }),
+    JSON.stringify({ type: "session.shutdown", data: { currentTokens: 20 } }),
+  ].join("\n"));
+  assert.equal(readStoredUsage({ sessionStatePath: root, sessionId: "session-1" }).currentTokens, 20);
 });

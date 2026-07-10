@@ -306,6 +306,64 @@ test("agent workflow slash commands still pass through prompt mode", async () =>
   assert.equal(result._meta.command.name, "/review");
 });
 
+test("non-model session commands are handled without prompt mode", async () => {
+  const { adapter, runner } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+
+  await adapter.handle("session/prompt", { sessionId, prompt: "/agent explore" });
+  await adapter.handle("session/prompt", { sessionId, prompt: "/theme dim" });
+  await adapter.handle("session/prompt", { sessionId, prompt: "/experimental on" });
+  await adapter.handle("session/prompt", { sessionId, prompt: "/memory off" });
+  await adapter.handle("session/prompt", { sessionId, prompt: "/keep-alive busy" });
+  await adapter.handle("session/prompt", { sessionId, prompt: "/limits set max-ai-credits 30" });
+  await adapter.handle("session/prompt", { sessionId, prompt: "hello" });
+
+  assert.equal(runner.calls.filter((call) => call.type === "prompt").length, 1);
+  assert.deepEqual(runner.calls.at(-1).options.copilotArgs.slice(-6, -2), [
+    "--agent", "explore", "--max-ai-credits", "30",
+  ]);
+});
+
+test("diff runs git directly instead of asking the model", async () => {
+  const { adapter, runner } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+  const result = await adapter.handle("session/prompt", { sessionId, prompt: "/diff" });
+
+  assert.equal(result._meta.handledBy, "adapter");
+  assert.equal(runner.calls[0].type, "command");
+  assert.equal(runner.calls[0].command, "git");
+  assert.deepEqual(runner.calls[0].args, ["--no-pager", "diff", "--no-ext-diff", "HEAD", "--"]);
+});
+
+test("context and usage read the latest persisted Copilot metrics", async () => {
+  const { adapter, runner, notifications, sessionStateDir } = createAdapter();
+  writeStoredWorkspace(sessionStateDir, "usage-session", {
+    cwd: "/repo",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    events: [{
+      type: "session.shutdown",
+      data: {
+        currentModel: "gpt-5.4",
+        currentTokens: 123,
+        systemTokens: 10,
+        conversationTokens: 20,
+        toolDefinitionsTokens: 93,
+        totalPremiumRequests: 2,
+        totalApiDurationMs: 500,
+        tokenDetails: { input: { tokenCount: 100 }, output: { tokenCount: 23 } },
+      },
+    }],
+  });
+  await adapter.handle("session/load", { sessionId: "usage-session", cwd: "/repo" });
+  await adapter.handle("session/prompt", { sessionId: "usage-session", prompt: "/context" });
+  await adapter.handle("session/prompt", { sessionId: "usage-session", prompt: "/usage" });
+
+  assert.equal(runner.calls.length, 0);
+  const text = notifications.map((item) => item.params.update.content?.text || "").join("\n");
+  assert.match(text, /Context tokens: 123/);
+  assert.match(text, /Premium requests: 2/);
+});
+
 test("subagents command is handled natively instead of prompt mode", async () => {
   const { adapter, runner, notifications } = createAdapter();
   const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });

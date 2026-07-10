@@ -169,9 +169,9 @@ All commands from `AGENTS.md` are advertised to the ACP client:
 
 Routing is adapter-owned rather than a proxy to `copilot --acp`:
 
-- Adapter-native: `/help`, `/model`, `/autopilot`, `/cwd`, `/add-dir`, `/list-dirs`, `/allow-all`, `/reset-allowed-tools`, `/resume`, `/rename`, `/session`, `/new`, `/clear`, `/login`, `/logout`, `/settings`, `/skills` project listing, `/subagents`, and `/exit`.
+- Adapter-native: `/help`, `/agent`, `/model`, `/autopilot`, `/cwd`, `/add-dir`, `/list-dirs`, `/diff`, `/allow-all`, `/reset-allowed-tools`, `/resume`, `/rename`, `/context`, `/usage`, `/session`, `/new`, `/clear`, `/login`, `/logout`, `/settings`, `/skills` project listing, `/subagents`, `/theme`, `/experimental`, `/memory`, `/keep-alive`, `/limits`, and `/exit`.
 - Direct Copilot CLI subcommands: `/init`, `/skills add/remove/list --json`, `/mcp`, `/plugin`, `/update`, and `/version`.
-- Copilot prompt mode: remaining agent workflow commands such as `/review`, `/diff`, `/plan`, `/research`, `/delegate`, `/tasks`, and normal prompts.
+- Copilot prompt mode: remaining agent workflows such as `/review`, `/plan`, `/research`, `/delegate`, `/tasks`, and normal prompts.
 
 `session/new`'s `cwd` parameter is treated as the client-provided working
 directory. In Emacs agent-shell, this is controlled by

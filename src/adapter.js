@@ -24,7 +24,7 @@ import {
   unsetSetting,
   writeSettings,
 } from "./settings.js";
-import { listStoredSessions, readStoredSession, readStoredTranscript } from "./session-store.js";
+import { listStoredSessions, readStoredSession, readStoredTranscript, readStoredUsage } from "./session-store.js";
 
 const DIRECT_COPILOT_COMMANDS = Object.freeze({
   "/init": { args: ["init"] },
@@ -104,22 +104,31 @@ export class CopilotAcpAdapter {
           copilotCommands: listCommands(),
           nativeCommands: [
             "/help",
+            "/agent",
             "/model",
             "/autopilot",
             "/cwd",
             "/add-dir",
             "/list-dirs",
+            "/diff",
             "/allow-all",
             "/reset-allowed-tools",
             "/resume",
             "/rename",
             "/session",
+            "/context",
+            "/usage",
             "/new",
             "/clear",
             "/logout",
             "/exit",
             "/settings",
             "/subagents",
+            "/theme",
+            "/experimental",
+            "/memory",
+            "/keep-alive",
+            "/limits",
           ],
           directCopilotCommands: Object.keys(DIRECT_COPILOT_COMMANDS),
         },
@@ -146,6 +155,8 @@ export class CopilotAcpAdapter {
       resumeExisting: false,
       name: params.name || "",
       allowAll: false,
+      agentName: "",
+      maxAiCredits: null,
       createdAt: new Date().toISOString(),
     };
     this.sessions.set(sessionId, session);
@@ -194,6 +205,8 @@ export class CopilotAcpAdapter {
       resumeExisting: true,
       name: stored?.title || params.name || "",
       allowAll: false,
+      agentName: "",
+      maxAiCredits: null,
       createdAt: new Date().toISOString(),
     };
     this.sessions.set(sessionId, session);
@@ -319,6 +332,8 @@ export class CopilotAcpAdapter {
     switch (slashCommand.name) {
       case "/model":
         return this.handleModelCommand(session, slashCommand);
+      case "/agent":
+        return this.handleAgentCommand(session, slashCommand);
       case "/autopilot":
         return this.handleAutopilotCommand(session, slashCommand);
       case "/cwd":
@@ -327,6 +342,8 @@ export class CopilotAcpAdapter {
         return this.handleAddDirCommand(session, slashCommand);
       case "/list-dirs":
         return this.handleListDirsCommand(session, slashCommand);
+      case "/diff":
+        return this.handleDiffCommand(session, slashCommand);
       case "/allow-all":
         session.allowAll = true;
         this.sendText(session?.id, "All Copilot permissions will be requested for subsequent prompts with `--allow-all`.");
@@ -342,6 +359,20 @@ export class CopilotAcpAdapter {
       case "/session":
         this.sendText(session?.id, sessionSummary(session));
         return this.commandDone(slashCommand, { handledBy: "adapter" });
+      case "/context":
+        return this.handleUsageCommand(session, slashCommand, true);
+      case "/usage":
+        return this.handleUsageCommand(session, slashCommand, false);
+      case "/theme":
+        return this.handleSimpleSettingCommand(session, slashCommand, "theme", "github");
+      case "/experimental":
+        return this.handleSimpleSettingCommand(session, slashCommand, "experimental", false, "boolean");
+      case "/memory":
+        return this.handleSimpleSettingCommand(session, slashCommand, "memory", true, "boolean");
+      case "/keep-alive":
+        return this.handleSimpleSettingCommand(session, slashCommand, "keepAlive", "off", "keepAlive");
+      case "/limits":
+        return this.handleLimitsCommand(session, slashCommand);
       case "/new":
       case "/clear":
         return this.handleNewCommand(session, slashCommand);
@@ -410,6 +441,118 @@ export class CopilotAcpAdapter {
       },
     });
     this.sendText(session?.id, `Model set to ${session.modelId}.`);
+    return this.commandDone(slashCommand, { handledBy: "adapter" });
+  }
+
+  handleAgentCommand(session, slashCommand) {
+    const [agentName] = parseCommandArgs(slashCommand.rawArgs);
+    const projectAgents = discoverProjectAgents(session?.cwd || this.config.cwd);
+    if (!agentName || agentName === "list") {
+      const lines = [
+        `Current agent: ${session.agentName || "default"}`,
+        "Project agents:",
+        ...(projectAgents.agents.length
+          ? projectAgents.agents.map((agent) => `- ${agent.name}${agent.description ? `: ${agent.description}` : ""}`)
+          : ["- none"]),
+      ];
+      this.sendText(session?.id, lines.join("\n"));
+      return this.commandDone(slashCommand, { handledBy: "adapter" });
+    }
+    if (["default", "none", "reset"].includes(agentName)) {
+      session.agentName = "";
+    } else {
+      session.agentName = agentName;
+    }
+    this.sendText(session?.id, `Agent set to ${session.agentName || "default"}.`);
+    return this.commandDone(slashCommand, { handledBy: "adapter" });
+  }
+
+  async handleDiffCommand(session, slashCommand) {
+    const rawArgs = parseCommandArgs(slashCommand.rawArgs);
+    const args = ["--no-pager", "diff", "--no-ext-diff", ...(rawArgs.length ? rawArgs : ["HEAD", "--"] )];
+    const result = await this.runner.runCommand("git", args, {
+      cwd: session?.cwd || this.config.cwd,
+      env: { ...this.globalEnv, ...(session?.env || {}) },
+      timeoutMs: this.config.requestTimeoutMs,
+    });
+    this.sendOutput(session?.id, result);
+    if (result.ok && !result.stdout && !result.stderr) {
+      this.sendText(session?.id, "No tracked changes.");
+    }
+    return this.commandDone(slashCommand, { handledBy: "adapter", exitCode: result.exitCode }, result.ok ? "end_turn" : "error");
+  }
+
+  handleUsageCommand(session, slashCommand, contextOnly) {
+    const usage = readStoredUsage({
+      sessionStatePath: this.config.copilotSessionStatePath,
+      sessionId: session?.copilotSessionId,
+    });
+    if (!usage) {
+      this.sendText(session?.id, "No completed Copilot usage data is available for this session yet.");
+      return this.commandDone(slashCommand, { handledBy: "adapter" });
+    }
+    const lines = contextOnly
+      ? [
+          `Context tokens: ${usage.currentTokens ?? "unknown"}`,
+          `System: ${usage.systemTokens ?? "unknown"}`,
+          `Conversation: ${usage.conversationTokens ?? "unknown"}`,
+          `Tool definitions: ${usage.toolDefinitionsTokens ?? "unknown"}`,
+        ]
+      : [
+          `Model: ${usage.currentModel || session.modelId || "unknown"}`,
+          `Premium requests: ${usage.totalPremiumRequests ?? "unknown"}`,
+          `Input tokens: ${usage.tokenDetails?.input?.tokenCount ?? "unknown"}`,
+          `Cache-read tokens: ${usage.tokenDetails?.cache_read?.tokenCount ?? "unknown"}`,
+          `Output tokens: ${usage.tokenDetails?.output?.tokenCount ?? "unknown"}`,
+          `API duration: ${usage.totalApiDurationMs == null ? "unknown" : `${usage.totalApiDurationMs} ms`}`,
+        ];
+    this.sendText(session?.id, lines.join("\n"));
+    return this.commandDone(slashCommand, { handledBy: "adapter" });
+  }
+
+  handleSimpleSettingCommand(session, slashCommand, key, defaultValue, type = "string") {
+    const [rawValue] = parseCommandArgs(slashCommand.rawArgs);
+    const settings = readSettings(this.config.copilotSettingsPath);
+    if (!rawValue) {
+      this.sendText(session?.id, `${key}: ${JSON.stringify(getSetting(settings, key) ?? defaultValue)}`);
+      return this.commandDone(slashCommand, { handledBy: "adapter" });
+    }
+
+    let value = rawValue;
+    if (type === "boolean") {
+      if (!["on", "off", "true", "false"].includes(rawValue.toLowerCase())) {
+        this.sendText(session?.id, `Usage: ${slashCommand.name} [on|off]`);
+        return this.commandDone(slashCommand, { handledBy: "adapter", error: "invalid value" }, "error");
+      }
+      value = ["on", "true"].includes(rawValue.toLowerCase());
+    } else if (type === "keepAlive" && !["on", "off", "busy"].includes(rawValue.toLowerCase())) {
+      this.sendText(session?.id, "Usage: /keep-alive [on|off|busy]");
+      return this.commandDone(slashCommand, { handledBy: "adapter", error: "invalid value" }, "error");
+    }
+    setSetting(settings, key, value);
+    writeSettings(this.config.copilotSettingsPath, settings);
+    this.sendText(session?.id, `Set ${key} to ${JSON.stringify(value)}.`);
+    return this.commandDone(slashCommand, { handledBy: "adapter", setting: key });
+  }
+
+  handleLimitsCommand(session, slashCommand) {
+    const args = parseCommandArgs(slashCommand.rawArgs);
+    if (!args.length) {
+      this.sendText(session?.id, `Maximum AI credits: ${session.maxAiCredits ?? "not set"}`);
+      return this.commandDone(slashCommand, { handledBy: "adapter" });
+    }
+    if (["unset", "reset", "off"].includes(args[0])) {
+      session.maxAiCredits = null;
+      this.sendText(session?.id, "Maximum AI credit limit unset.");
+      return this.commandDone(slashCommand, { handledBy: "adapter" });
+    }
+    const value = args[0] === "set" && args[1] === "max-ai-credits" ? Number(args[2]) : Number(args[0]);
+    if (!Number.isFinite(value) || value < 30) {
+      this.sendText(session?.id, "Usage: /limits set max-ai-credits <number-at-least-30>");
+      return this.commandDone(slashCommand, { handledBy: "adapter", error: "invalid limit" }, "error");
+    }
+    session.maxAiCredits = value;
+    this.sendText(session?.id, `Maximum AI credits set to ${value}.`);
     return this.commandDone(slashCommand, { handledBy: "adapter" });
   }
 
@@ -511,6 +654,8 @@ export class CopilotAcpAdapter {
     session.copilotSessionId = randomUUID();
     session.resumeExisting = false;
     session.createdAt = new Date().toISOString();
+    session.agentName = "";
+    session.maxAiCredits = null;
     this.sendText(session?.id, `Started a fresh Copilot conversation: ${session.copilotSessionId}`);
     return this.commandDone(slashCommand, { handledBy: "adapter" });
   }
@@ -927,16 +1072,20 @@ function commandHelpRouting(name) {
     [
       "/help",
       "/changelog",
+      "/agent",
       "/model",
       "/autopilot",
       "/cwd",
       "/add-dir",
       "/list-dirs",
+      "/diff",
       "/allow-all",
       "/reset-allowed-tools",
       "/resume",
       "/rename",
       "/session",
+      "/context",
+      "/usage",
       "/new",
       "/clear",
       "/login",
@@ -944,6 +1093,11 @@ function commandHelpRouting(name) {
       "/exit",
       "/settings",
       "/subagents",
+      "/theme",
+      "/experimental",
+      "/memory",
+      "/keep-alive",
+      "/limits",
     ].includes(name)
   ) {
     return "Handled by the ACP adapter.";
@@ -1165,7 +1319,9 @@ function buildPromptArgs(baseArgs, session) {
   const sessionStripped = stripOption(modeStripped, "--session-id");
   const resumeStripped = stripOption(sessionStripped, "--resume");
   const addDirStripped = stripOption(resumeStripped, "--add-dir");
-  const result = stripFlag(addDirStripped, "--continue");
+  const agentStripped = stripOption(addDirStripped, "--agent");
+  const limitStripped = stripOption(agentStripped, "--max-ai-credits");
+  const result = stripFlag(limitStripped, "--continue");
 
   if (session?.modelId && session.modelId !== "auto") {
     result.push("--model", session.modelId);
@@ -1177,6 +1333,14 @@ function buildPromptArgs(baseArgs, session) {
 
   if (session?.allowAll) {
     result.push("--allow-all");
+  }
+
+  if (session?.agentName) {
+    result.push("--agent", session.agentName);
+  }
+
+  if (session?.maxAiCredits) {
+    result.push("--max-ai-credits", String(session.maxAiCredits));
   }
 
   for (const directory of session?.additionalDirectories || []) {
