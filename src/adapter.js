@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { DEFAULT_CHANGELOG_URL, fetchCopilotChangelog, selectChangelog } from "./changelog.js";
 import {
   buildGithubLoginCommand,
@@ -237,15 +238,26 @@ export class CopilotAcpAdapter {
     const session = this.sessions.get(sessionId);
     const prompt = extractPromptText(params);
     const slashCommand = parseSlashCommand(prompt);
+    const projectSkill = slashCommand
+      ? findProjectSkill(session?.cwd || this.config.cwd, slashCommand.name)
+      : null;
 
     if (slashCommand) {
-      const commandResult = await this.handleSlashCommand(session, slashCommand, prompt);
+      const commandResult = await this.handleSlashCommand(
+        session,
+        slashCommand,
+        prompt,
+        projectSkill,
+      );
       if (commandResult) {
         return commandResult;
       }
     }
 
-    const result = await this.runner.runPrompt(prompt, {
+    const forwardedPrompt = projectSkill
+      ? buildProjectSkillPrompt(projectSkill, slashCommand.rawArgs)
+      : prompt;
+    const result = await this.runner.runPrompt(forwardedPrompt, {
       cwd: session?.cwd || this.config.cwd,
       env: { ...this.globalEnv, ...(session?.env || {}) },
       copilotArgs: buildPromptArgs(this.config.copilotArgs || [], session),
@@ -276,7 +288,7 @@ export class CopilotAcpAdapter {
     }).sessionId;
   }
 
-  async handleSlashCommand(session, slashCommand, prompt) {
+  async handleSlashCommand(session, slashCommand, prompt, projectSkill = null) {
     if (slashCommand.name === "/login") {
       return this.login(session, slashCommand.rawArgs);
     }
@@ -318,7 +330,7 @@ export class CopilotAcpAdapter {
       return nativeResult;
     }
 
-    if (!slashCommand.supported) {
+    if (!slashCommand.supported && !projectSkill) {
       this.sendText(
         session?.id,
         `Unknown slash command ${slashCommand.name}. Forwarding it to Copilot in case the installed CLI supports it.`,
@@ -976,11 +988,13 @@ export class CopilotAcpAdapter {
   }
 
   sendAvailableCommands(sessionId) {
+    const session = this.sessions.get(sessionId);
+    const projectSkills = discoverProjectSkills(session?.cwd || this.config.cwd).skills;
     this.notify("session/update", {
       sessionId,
       update: {
         sessionUpdate: "available_commands_update",
-        availableCommands: listAvailableCommands(),
+        availableCommands: listAvailableCommands(projectSkills),
       },
     });
   }
@@ -1226,6 +1240,32 @@ function formatProjectResource(resource) {
     lines.push(`- description: ${resource.description}`);
   }
   return lines.join("\n");
+}
+
+function findProjectSkill(cwd, commandName) {
+  const skillName = String(commandName || "").replace(/^\//, "");
+  return discoverProjectSkills(cwd).skills.find((skill) => skill.name === skillName) || null;
+}
+
+function buildProjectSkillPrompt(skill, rawArgs) {
+  let instructions = "";
+  try {
+    instructions = readFileSync(skill.path, "utf8");
+  } catch (error) {
+    instructions = `The skill instructions could not be read: ${error.message}`;
+  }
+
+  return [
+    `Execute the GitHub Copilot project skill /${skill.name}.`,
+    `Skill source file: ${skill.path}`,
+    `Skill base directory: ${dirname(skill.path)}`,
+    `Invocation arguments: ${String(rawArgs || "").trim() || "(none)"}`,
+    "Follow the skill instructions below as the authoritative task instructions. Resolve relative resource paths from the skill base directory.",
+    "",
+    "<skill_instructions>",
+    instructions.trim(),
+    "</skill_instructions>",
+  ].join("\n");
 }
 
 function isSupportedAdapterSetting(key) {

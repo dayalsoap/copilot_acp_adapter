@@ -278,6 +278,50 @@ test("skills list is handled natively from session cwd", async () => {
   );
 });
 
+test("project skills are advertised and forwarded without an unknown-command warning", async () => {
+  const { adapter, runner, notifications } = createAdapter();
+  const repo = mkdtempSync(join(tmpdir(), "copilot-acp-repo-"));
+  mkdirSync(join(repo, ".git"));
+  mkdirSync(join(repo, ".github", "skills", "adapter-smoke-test"), { recursive: true });
+  writeFileSync(
+    join(repo, ".github", "skills", "adapter-smoke-test", "SKILL.md"),
+    "---\nname: adapter-smoke-test\ndescription: Run the adapter smoke test\n---\n",
+  );
+
+  const { sessionId } = await adapter.handle("session/new", { cwd: repo });
+  const availableCommands = notifications.find(
+    (notification) =>
+      notification.method === "session/update" &&
+      notification.params.update.sessionUpdate === "available_commands_update",
+  )?.params.update.availableCommands;
+
+  assert.deepEqual(
+    availableCommands.find((command) => command.name === "adapter-smoke-test"),
+    {
+      name: "adapter-smoke-test",
+      description: "Run the adapter smoke test",
+      input: { hint: "optional skill arguments" },
+    },
+  );
+
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/adapter-smoke-test hello",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(runner.calls[0].type, "prompt");
+  assert.match(runner.calls[0].prompt, /Execute the GitHub Copilot project skill \/adapter-smoke-test\./);
+  assert.match(runner.calls[0].prompt, /Invocation arguments: hello/);
+  assert.match(runner.calls[0].prompt, /Run the adapter smoke test/);
+  assert.equal(
+    notifications.some((notification) =>
+      notification.params.update.content?.text?.includes("Unknown slash command /adapter-smoke-test"),
+    ),
+    false,
+  );
+});
+
 test("skills management subcommands still use Copilot CLI", async () => {
   const { adapter, runner } = createAdapter();
   const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });

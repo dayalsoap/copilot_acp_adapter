@@ -126,14 +126,29 @@ export function listCommands() {
   return COMMANDS.map((command) => ({ ...command }));
 }
 
-export function listAvailableCommands() {
-  return COMMANDS.map((command) => ({
+export function listAvailableCommands(projectSkills = []) {
+  const commands = COMMANDS.map((command) => ({
     name: command.name.slice(1),
     description:
       COMMAND_DESCRIPTIONS[command.name] ||
       `Run Copilot ${command.group.toLowerCase()} command ${command.name}`,
     input: { hint: "optional command arguments" },
   }));
+  const commandNames = new Set(commands.map((command) => command.name));
+
+  for (const skill of projectSkills) {
+    if (!skill?.name || commandNames.has(skill.name)) {
+      continue;
+    }
+    commands.push({
+      name: skill.name,
+      description: skill.description || `Run Copilot project skill /${skill.name}`,
+      input: { hint: "optional skill arguments" },
+    });
+    commandNames.add(skill.name);
+  }
+
+  return commands;
 }
 
 function unquoteArg(arg) {

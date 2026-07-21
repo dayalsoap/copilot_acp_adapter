@@ -206,8 +206,55 @@ per-agent model settings from `COPILOT_SETTINGS_PATH` or
 
 `/skills` with no arguments, or `/skills list`, uses the same cwd-first then
 git-root fallback for project skills. It checks `.github/skills/`,
-`.agents/skills/`, and `.claude/skills/`. Other `/skills` subcommands are
-delegated to the Copilot CLI.
+`.agents/skills/`, and `.claude/skills/`. Discovered project skills are also
+included in ACP `available_commands_update` notifications, so Emacs agent-shell
+can offer them in its slash-command completion. Because Copilot CLI prompt mode
+does not apply interactive skill slash commands itself, the adapter expands a
+matched project `SKILL.md`, its invocation arguments, and its base directory
+into the forwarded prompt. This also lets skill instructions refer to bundled
+resources by relative path. Other `/skills` subcommands are delegated to the
+Copilot CLI.
+
+### Project skill smoke tests
+
+This repository includes three project-local GitHub Copilot skills under
+`.github/skills/`:
+
+- `/adapter-smoke-test [text]`: no-tool deterministic invocation test. Expected
+  output begins with `COPILOT_SKILL_SMOKE_TEST=PASS` and echoes the arguments.
+- `/adapter-resource-test`: asks Copilot to read a resource bundled beside its
+  `SKILL.md`. Expected output is
+  `COPILOT_SKILL_RESOURCE_TEST=PASS:RESOURCE_LOADED`.
+- `/adapter-project-summary [focus]`: performs read-only inspection of key
+  adapter files and returns a structured architecture summary. Its description
+  also allows Copilot to select it automatically for matching plain-language
+  requests.
+
+From the repository root, first verify what the installed CLI discovers:
+
+```sh
+copilot skill list --json
+```
+
+Then start a fresh agent-shell session whose cwd is this repository and try:
+
+```text
+/skills
+/adapter-smoke-test hello from emacs
+/adapter-resource-test
+/adapter-project-summary skill discovery
+```
+
+To test automatic skill selection rather than explicit slash invocation, ask:
+
+```text
+Give me an adapter architecture summary and recommend the best next agent-shell test.
+```
+
+A newly added skill is advertised when an ACP session starts. Restart the
+agent-shell buffer after adding or renaming skills so its completion menu
+receives a fresh command list. Authentication is still required for prompt-mode
+skill execution; `/skills` itself is handled locally by the adapter.
 
 Prompt-mode calls for new adapter sessions include a stable `--session-id` so
 follow-up prompts share Copilot session state. `/new` and `/clear` rotate that

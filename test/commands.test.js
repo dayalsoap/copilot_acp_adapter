@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { COMMAND_SET, listCommands, parseSlashCommand } from "../src/commands.js";
+import {
+  COMMAND_SET,
+  listAvailableCommands,
+  listCommands,
+  parseSlashCommand,
+} from "../src/commands.js";
 
 test("catalog includes all AGENTS.md slash commands", () => {
   const expected = [
@@ -86,4 +91,21 @@ test("parseSlashCommand preserves raw args and support status", () => {
 
   assert.equal(parseSlashCommand("plain prompt"), null);
   assert.equal(parseSlashCommand("/not-real").supported, false);
+});
+
+test("available commands include discovered project skills", () => {
+  const commands = listAvailableCommands([
+    { name: "adapter-smoke-test", description: "Run the adapter smoke test" },
+    { name: "help", description: "Must not replace the built-in command" },
+  ]);
+
+  assert.deepEqual(
+    commands.find((command) => command.name === "adapter-smoke-test"),
+    {
+      name: "adapter-smoke-test",
+      description: "Run the adapter smoke test",
+      input: { hint: "optional skill arguments" },
+    },
+  );
+  assert.equal(commands.filter((command) => command.name === "help").length, 1);
 });
