@@ -1,9 +1,45 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { readStoredTranscript, readStoredUsage } from "../src/session-store.js";
+import {
+  listStoredSessions,
+  parseWorkspace,
+  readStoredTranscript,
+  readStoredUsage,
+} from "../src/session-store.js";
+
+test("parses generated multiline session summaries", () => {
+  assert.deepEqual(parseWorkspace([
+    "id: session-1",
+    "name: |-",
+    "  First summary line",
+    "  Second summary line...",
+    "user_named: false",
+  ].join("\n")), {
+    id: "session-1",
+    name: "First summary line\nSecond summary line...",
+    user_named: "false",
+  });
+});
+
+test("lists generated summaries and omits unfinished unnamed sessions", () => {
+  const root = mkdtempSync(join(tmpdir(), "copilot-list-"));
+  for (const [id, name] of [["summarized", "name: |-\n  Detailed summary\n  More context..."], ["unfinished", ""]]) {
+    const session = join(root, id);
+    mkdirSync(session);
+    writeFileSync(join(session, "workspace.yaml"), `id: ${id}\ncwd: /repo\n${name}\n`);
+    writeFileSync(join(session, "events.jsonl"), "");
+  }
+
+  assert.deepEqual(listStoredSessions({ sessionStatePath: root, cwd: "/repo" }), [{
+    sessionId: "summarized",
+    cwd: "/repo",
+    title: "Detailed summary\nMore context...",
+    updatedAt: statUpdatedAt(join(root, "summarized", "events.jsonl")),
+  }]);
+});
 
 test("reads user and assistant messages from Copilot events", () => {
   const root = mkdtempSync(join(tmpdir(), "copilot-transcript-"));
@@ -32,3 +68,7 @@ test("reads the latest completed usage snapshot", () => {
   ].join("\n"));
   assert.equal(readStoredUsage({ sessionStatePath: root, sessionId: "session-1" }).currentTokens, 20);
 });
+
+function statUpdatedAt(path) {
+  return statSync(path).mtime.toISOString();
+}

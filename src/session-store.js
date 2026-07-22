@@ -23,7 +23,7 @@ export function listStoredSessions({ sessionStatePath, cwd, limit = 50 }) {
 
     const workspace = parseWorkspace(readFileSync(workspacePath, "utf8"));
     const sessionCwd = workspace.cwd ? resolve(workspace.cwd) : "";
-    if (sessionCwd !== targetCwd) {
+    if (sessionCwd !== targetCwd || !workspace.name) {
       continue;
     }
 
@@ -31,7 +31,7 @@ export function listStoredSessions({ sessionStatePath, cwd, limit = 50 }) {
     sessions.push({
       sessionId: workspace.id || entry.name,
       cwd: workspace.cwd || targetCwd,
-      title: workspace.name || "(untitled)",
+      title: workspace.name,
       updatedAt,
     });
   }
@@ -122,12 +122,35 @@ export function readStoredUsage({ sessionStatePath, sessionId }) {
 
 export function parseWorkspace(text) {
   const result = {};
-  for (const line of String(text || "").split(/\r?\n/)) {
+  const lines = String(text || "").split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*?)\s*$/);
     if (!match) {
       continue;
     }
-    result[match[1]] = unquoteYamlScalar(match[2]);
+    const block = match[2].match(/^([>|])([+-])?$/);
+    if (!block) {
+      result[match[1]] = unquoteYamlScalar(match[2]);
+      continue;
+    }
+
+    const content = [];
+    while (index + 1 < lines.length) {
+      const nextLine = lines[index + 1];
+      if (nextLine && !/^\s/.test(nextLine)) {
+        break;
+      }
+      content.push(nextLine.replace(/^\s{1,2}/, ""));
+      index += 1;
+    }
+    let value = block[1] === ">"
+      ? content.join(" ").replace(/ +/g, " ")
+      : content.join("\n");
+    if (block[2] === "-") {
+      value = value.replace(/\n+$/, "");
+    }
+    result[match[1]] = value;
   }
   return result;
 }

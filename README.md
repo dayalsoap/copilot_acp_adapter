@@ -182,7 +182,8 @@ The adapter advertises ACP session listing/loading and reads Copilot CLI
 conversation metadata from `$COPILOT_HOME/session-state` or
 `COPILOT_SESSION_STATE_PATH`. `session/list` mirrors Copilot's ACP behavior by
 returning completed conversations whose stored workspace `cwd` matches the
-requested cwd. `session/load` maps the selected id to subsequent Copilot prompt
+requested cwd, including Copilot's multiline generated session summaries as
+picker titles. `session/load` maps the selected id to subsequent Copilot prompt
 calls via `--resume=<id>`.
 During `session/load`, the adapter also replays user and assistant messages from
 Copilot's `events.jsonl` as ACP history updates so clients can render the stored
