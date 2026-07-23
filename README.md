@@ -257,6 +257,33 @@ agent-shell buffer after adding or renaming skills so its completion menu
 receives a fresh command list. Authentication is still required for prompt-mode
 skill execution; `/skills` itself is handled locally by the adapter.
 
+### Project agent smoke tests
+
+This repository includes three deliberately distinct project agents under
+`.github/agents/`:
+
+- `adapter-explorer`: read-only architecture and request-flow exploration.
+- `test-diagnostician`: test execution and failure diagnosis without edits.
+- `adapter-reviewer`: diff review for ACP compatibility and regressions.
+
+Start a fresh agent-shell session in the repository root, then try:
+
+```text
+/agent
+/agent adapter-explorer
+Trace how session/prompt reaches the Copilot CLI.
+/agent test-diagnostician
+Run the unit tests and diagnose the first failure, or suggest a missing test.
+/agent adapter-reviewer
+Review the current diff.
+/agent default
+```
+
+Each test agent begins its final response with a unique `TEST_AGENT=...` marker,
+making it easy to confirm that `/agent` changed the agent used for subsequent
+prompts. `/agent default`, `/agent none`, or `/agent reset` restores Copilot's
+default agent.
+
 Prompt-mode calls for new adapter sessions include a stable `--session-id` so
 follow-up prompts share Copilot session state. `/new` and `/clear` rotate that
 Copilot session id. Loaded conversations and `/resume <id>` use Copilot's
