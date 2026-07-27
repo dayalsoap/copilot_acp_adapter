@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   listConfiguredModels,
   modelDisplayName,
+  parseCopilotConfigModels,
   parseNativeAcpModelsOutput,
   parseModelCatalog,
 } from "../src/models.js";
@@ -82,6 +83,26 @@ test("native ACP model parser prefers settable config option models", () => {
     "auto",
     "allowed-model",
     "other-allowed-model",
+  ]);
+});
+
+test("Copilot config help parser reads model choices", () => {
+  const output = [
+    "Configuration Settings:",
+    "",
+    "  `model`: AI model to use for Copilot CLI; can be changed with /model command or --model flag option.",
+    '    - "claude-sonnet-5"',
+    '    - "gpt-5.4"',
+    '    - "gemini-3.5-flash"',
+    "",
+    "  `contextTier`: context window tier for tiered-pricing models.",
+  ].join("\n");
+
+  assert.deepEqual(parseCopilotConfigModels(output), [
+    "auto",
+    "claude-sonnet-5",
+    "gpt-5.4",
+    "gemini-3.5-flash",
   ]);
 });
 

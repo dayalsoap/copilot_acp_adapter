@@ -121,9 +121,10 @@ metadata or `session/set_config_option`. On session start, the adapter probes th
 native `copilot --acp` server for the plan-filtered model picker and exposes it
 through both `models.availableModels` and `configOptions[id=model]`.
 Use `COPILOT_MODELS` as a comma-separated or JSON array override to skip native
-ACP discovery. If discovery fails or times out, the adapter only advertises
-`auto` plus the current configured model, avoiding a broad static catalog that
-may include administrator-disabled models.
+ACP discovery. If native ACP does not expose models, the adapter falls back to
+the installed CLI's `copilot help config` model choices. If both discovery paths
+fail or time out, the adapter only advertises `auto` plus the current configured
+model.
 The session mode defaults to `Agent` and can be changed from the `agent-shell`
 mode menu when available.
 

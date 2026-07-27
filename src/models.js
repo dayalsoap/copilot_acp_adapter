@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 
 let cachedNativeModels = null;
 let cachedNativeModelsPromise = null;
+let cachedHelpModels = null;
+let cachedHelpModelsPromise = null;
 
 export function parseModelCatalog(value) {
   if (Array.isArray(value)) {
@@ -49,6 +51,9 @@ export async function listConfiguredModels(config) {
   if (cachedNativeModels) {
     return cachedNativeModels;
   }
+  if (cachedHelpModels) {
+    return cachedHelpModels;
+  }
 
   cachedNativeModelsPromise ||= fetchNativeAcpModels({
     command: config.copilotCommand,
@@ -64,10 +69,56 @@ export async function listConfiguredModels(config) {
   }
 
   cachedNativeModelsPromise = null;
+  cachedHelpModelsPromise ||= fetchCopilotConfigModels({
+    command: config.copilotCommand,
+    cwd: config.cwd,
+    env: { COPILOT_AUTO_UPDATE: "false" },
+    timeoutMs: config.modelDiscoveryTimeoutMs,
+  });
+
+  const helpModels = await cachedHelpModelsPromise;
+  if (helpModels) {
+    cachedHelpModels = helpModels;
+    return cachedHelpModels;
+  }
+
+  cachedHelpModelsPromise = null;
   return config.copilotModels;
 }
 
+export function fetchCopilotConfigModels({ command, args = ["help", "config"], cwd, env = {}, timeoutMs = 3000 }) {
+  return fetchCommandOutput({ command, args, cwd, env, timeoutMs })
+    .then((output) => parseCopilotConfigModels(output));
+}
+
 export function fetchNativeAcpModels({ command, args = ["--acp", "--no-color"], cwd, env = {}, timeoutMs = 3000 }) {
+  return fetchNativeAcpOutput({ command, args, cwd, env, timeoutMs })
+    .then((output) => parseNativeAcpModelsOutput(output));
+}
+
+export function parseCopilotConfigModels(output) {
+  const models = [];
+  let inModelSection = false;
+
+  for (const line of String(output || "").split(/\r?\n/)) {
+    if (/^\s+`model`:\s/.test(line)) {
+      inModelSection = true;
+      continue;
+    }
+    if (inModelSection && /^\s+`[^`]+`:\s/.test(line)) {
+      break;
+    }
+
+    const match = inModelSection ? line.match(/^\s+-\s+"([^"]+)"/) : null;
+    if (match) {
+      models.push(match[1]);
+    }
+  }
+
+  return models.length ? uniqueModelIds(models) : null;
+}
+
+function fetchNativeAcpOutput({ command, args = ["--acp", "--no-color"], cwd, env = {}, timeoutMs = 3000 }) {
   if (!command) {
     return Promise.resolve(null);
   }
@@ -100,13 +151,15 @@ export function fetchNativeAcpModels({ command, args = ["--acp", "--no-color"], 
     }
 
     child.on("error", () => finish(null));
-    child.on("exit", () => finish(parseNativeAcpModelsOutput(stdout)));
+    child.on("close", () => finish(stdout));
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
       const models = parseNativeAcpModelsOutput(stdout);
       if (models) {
-        finish(models);
+        finish(stdout);
+      } else if (hasNativeAcpSessionResult(stdout)) {
+        finish(stdout);
       }
     });
 
@@ -136,6 +189,47 @@ export function fetchNativeAcpModels({ command, args = ["--acp", "--no-color"], 
   });
 }
 
+function fetchCommandOutput({ command, args, cwd, env = {}, timeoutMs = 3000 }) {
+  if (!command) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    let child;
+    let stdout = "";
+    let settled = false;
+    const timeout = setTimeout(() => finish(null), Number(timeoutMs || 3000));
+
+    function finish(output) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      child?.kill();
+      resolve(output);
+    }
+
+    try {
+      child = spawn(command, args, {
+        cwd: cwd || process.cwd(),
+        env: { ...process.env, ...env },
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      finish(null);
+      return;
+    }
+
+    child.on("error", () => finish(null));
+    child.on("close", (code) => finish(code === 0 ? stdout : null));
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+  });
+}
+
 export function parseNativeAcpModelsOutput(output) {
   for (const messageText of splitJsonRpcMessages(output)) {
     try {
@@ -157,6 +251,20 @@ export function parseNativeAcpModelsOutput(output) {
   }
 
   return null;
+}
+
+function hasNativeAcpSessionResult(output) {
+  for (const messageText of splitJsonRpcMessages(output)) {
+    try {
+      const message = JSON.parse(messageText);
+      if (message.id === 2 && message.result) {
+        return true;
+      }
+    } catch {
+      // Ignore partial/non-JSON output.
+    }
+  }
+  return false;
 }
 
 function splitJsonRpcMessages(output) {
