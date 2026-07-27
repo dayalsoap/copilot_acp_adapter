@@ -49,9 +49,45 @@ test("native ACP model parser reads filtered available models", () => {
   ]);
 });
 
-test("explicit model catalog override bypasses native discovery", () => {
+test("native ACP model parser prefers settable config option models", () => {
+  const output = [
+    JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        models: {
+          availableModels: [{ modelId: "auto" }, { modelId: "display-only" }],
+        },
+        configOptions: [
+          {
+            id: "model",
+            category: "model",
+            type: "select",
+            currentValue: "allowed-model",
+            options: [
+              { value: "allowed-model" },
+              {
+                group: "More",
+                options: [{ value: "other-allowed-model" }],
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  ].join("\n");
+
+  assert.deepEqual(parseNativeAcpModelsOutput(output), [
+    "auto",
+    "allowed-model",
+    "other-allowed-model",
+  ]);
+});
+
+test("explicit model catalog override bypasses native discovery", async () => {
   assert.deepEqual(
-    listConfiguredModels({
+    await listConfiguredModels({
       copilotModelsOverride: true,
       copilotModels: ["auto", "override-model"],
       copilotCommand: "/does/not/exist",
@@ -60,9 +96,9 @@ test("explicit model catalog override bypasses native discovery", () => {
   );
 });
 
-test("native discovery failure falls back to configured minimal catalog", () => {
+test("native discovery failure falls back to configured minimal catalog", async () => {
   assert.deepEqual(
-    listConfiguredModels({
+    await listConfiguredModels({
       copilotModelsOverride: false,
       copilotModels: ["auto"],
       copilotCommand: "/does/not/exist",

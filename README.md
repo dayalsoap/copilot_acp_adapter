@@ -115,9 +115,11 @@ explicitly:
              "COPILOT_MODEL_NAME=Claude Sonnet 5")
 ```
 
-The adapter passes `COPILOT_MODEL` to Copilot as `--model <id>` for prompts.
-If `COPILOT_MODEL=auto`, the header shows `Auto`; the adapter cannot know which
-server-side model Copilot eventually picks unless Copilot exposes that choice.
+The adapter passes the active model to Copilot as `--model <id>` for prompts.
+`agent-shell` can change it at runtime through either ACP's model picker
+metadata or `session/set_config_option`. On session start, the adapter probes the
+native `copilot --acp` server for the plan-filtered model picker and exposes it
+through both `models.availableModels` and `configOptions[id=model]`.
 Use `COPILOT_MODELS` as a comma-separated or JSON array override to skip native
 ACP discovery. If discovery fails or times out, the adapter only advertises
 `auto` plus the current configured model, avoiding a broad static catalog that

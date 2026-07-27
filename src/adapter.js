@@ -70,6 +70,8 @@ export class CopilotAcpAdapter {
         return this.loadSession(params);
       case "session/set_model":
         return this.setModel(params);
+      case "session/set_config_option":
+        return this.setConfigOption(params);
       case "session/set_mode":
         return this.setMode(params);
       case "prompt":
@@ -143,7 +145,7 @@ export class CopilotAcpAdapter {
     };
   }
 
-  newSession(params = {}) {
+  async newSession(params = {}) {
     const sessionId = params.sessionId || randomUUID();
     const session = {
       id: sessionId,
@@ -165,12 +167,14 @@ export class CopilotAcpAdapter {
     return this.sessionStartResult(session);
   }
 
-  sessionStartResult(session) {
+  async sessionStartResult(session) {
+    const models = await sessionModels(session, this.config);
     return {
       sessionId: session.id,
       cwd: session.cwd,
-      models: sessionModels(session, this.config),
+      models,
       modes: sessionModes(session),
+      configOptions: sessionConfigOptions(session, models),
     };
   }
 
@@ -184,7 +188,7 @@ export class CopilotAcpAdapter {
     };
   }
 
-  loadSession(params = {}) {
+  async loadSession(params = {}) {
     const sessionId = params.sessionId;
     if (!sessionId) {
       throw Object.assign(new Error("sessionId is required"), { code: -32602 });
@@ -444,14 +448,7 @@ export class CopilotAcpAdapter {
       return this.commandDone(slashCommand, { handledBy: "adapter" });
     }
 
-    session.modelId = modelId;
-    this.notify("session/update", {
-      sessionId: session.id,
-      update: {
-        sessionUpdate: "current_model_update",
-        currentModelId: session.modelId,
-      },
-    });
+    this.applySessionModel(session, modelId);
     this.sendText(session?.id, `Model set to ${session.modelId}.`);
     return this.commandDone(slashCommand, { handledBy: "adapter" });
   }
@@ -866,24 +863,67 @@ export class CopilotAcpAdapter {
   setModel(params = {}) {
     const session = this.sessions.get(params.sessionId);
     if (session) {
-      session.modelId = params.modelId || session.modelId;
+      this.applySessionModel(session, params.modelId || session.modelId);
     }
     return {};
+  }
+
+  async setConfigOption(params = {}) {
+    const session = this.sessions.get(params.sessionId);
+    if (!session) {
+      return {};
+    }
+
+    const configId = params.configId || params.id;
+    const value = configOptionValue(params.value);
+    if (configId === "model") {
+      this.applySessionModel(session, value || session.modelId);
+    } else if (configId === "mode") {
+      this.applySessionMode(session, value || session.modeId);
+    } else if (configId === "allow_all") {
+      session.allowAll = value === "on" || value === true;
+    }
+
+    const models = await sessionModels(session, this.config);
+    const configOptions = sessionConfigOptions(session, models);
+    this.notify("session/update", {
+      sessionId: session.id,
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions,
+      },
+    });
+    return { configOptions };
   }
 
   setMode(params = {}) {
     const session = this.sessions.get(params.sessionId);
     if (session) {
-      session.modeId = normalizeModeId(params.modeId || session.modeId);
-      this.notify("session/update", {
-        sessionId: session.id,
-        update: {
-          sessionUpdate: "current_mode_update",
-          currentModeId: session.modeId,
-        },
-      });
+      this.applySessionMode(session, params.modeId || session.modeId);
     }
     return {};
+  }
+
+  applySessionModel(session, modelId) {
+    session.modelId = modelId || session.modelId || "auto";
+    this.notify("session/update", {
+      sessionId: session.id,
+      update: {
+        sessionUpdate: "current_model_update",
+        currentModelId: session.modelId,
+      },
+    });
+  }
+
+  applySessionMode(session, modeId) {
+    session.modeId = normalizeModeId(modeId || session.modeId);
+    this.notify("session/update", {
+      sessionId: session.id,
+      update: {
+        sessionUpdate: "current_mode_update",
+        currentModeId: session.modeId,
+      },
+    });
   }
 
   async authenticate(params = {}) {
@@ -1293,9 +1333,9 @@ function sessionSummary(session) {
   ].join("\n");
 }
 
-function sessionModels(session, config) {
+async function sessionModels(session, config) {
   const currentModelId = session.modelId || "auto";
-  const modelIds = [...listConfiguredModels(config)];
+  const modelIds = [...(await listConfiguredModels(config))];
   if (!modelIds.includes(currentModelId)) {
     modelIds.unshift(currentModelId);
   }
@@ -1314,6 +1354,58 @@ function sessionModels(session, config) {
           : "Copilot CLI model",
     })),
   };
+}
+
+function sessionConfigOptions(session, models) {
+  const modes = sessionModes(session);
+  return [
+    {
+      type: "select",
+      id: "model",
+      name: "Model",
+      currentValue: models.currentModelId,
+      options: models.availableModels.map((model) => ({
+        value: model.modelId,
+        name: model.name,
+        description: model.description,
+      })),
+      category: "model",
+      description: "Controls which Copilot model is used for subsequent prompts.",
+    },
+    {
+      type: "select",
+      id: "mode",
+      name: "Mode",
+      currentValue: modes.currentModeId,
+      options: modes.availableModes.map((mode) => ({
+        value: mode.id,
+        name: mode.name,
+        description: mode.description,
+      })),
+      category: "mode",
+      description: "Controls how Copilot responds in this session.",
+    },
+    {
+      type: "select",
+      id: "allow_all",
+      name: "Allow All",
+      currentValue: session.allowAll ? "on" : "off",
+      options: [
+        {
+          value: "on",
+          name: "On",
+          description: "Automatically approve all tool, path, and URL requests for this adapter session",
+        },
+        {
+          value: "off",
+          name: "Off",
+          description: "Use the permissions configured by Copilot CLI and COPILOT_ARGS",
+        },
+      ],
+      category: "permissions",
+      description: "Controls the adapter-level allow-all override for subsequent prompts.",
+    },
+  ];
 }
 
 function sessionModes(session) {
@@ -1339,7 +1431,23 @@ function sessionModes(session) {
   };
 }
 
+function configOptionValue(value) {
+  if (value && typeof value === "object") {
+    return value.value ?? value.currentValue ?? value.id ?? "";
+  }
+  return value;
+}
+
 function normalizeModeId(modeId) {
+  if (String(modeId || "").endsWith("#agent")) {
+    return "agent";
+  }
+  if (String(modeId || "").endsWith("#plan")) {
+    return "plan";
+  }
+  if (String(modeId || "").endsWith("#autopilot")) {
+    return "autopilot";
+  }
   if (modeId === "interactive" || !modeId) {
     return "agent";
   }

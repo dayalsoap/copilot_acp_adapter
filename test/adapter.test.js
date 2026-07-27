@@ -112,6 +112,10 @@ test("session/new exposes model and mode metadata for agent-shell header", async
     result.models.availableModels.map((model) => model.modelId),
     ["auto", "claude-sonnet-5", "gpt-5.4", "gemini-3.5-flash"],
   );
+  assert.deepEqual(
+    result.configOptions.find((option) => option.id === "model").options.map((option) => option.value),
+    ["auto", "claude-sonnet-5", "gpt-5.4", "gemini-3.5-flash"],
+  );
   assert.equal(result.modes.currentModeId, "agent");
   assert.equal(result.modes.availableModes.some((mode) => mode.id === "plan"), true);
 });
@@ -210,6 +214,33 @@ test("session model and mode changes affect subsequent Copilot args", async () =
     "gpt-5.4",
     "--mode",
     "plan",
+    "--session-id",
+    sessionId,
+  ]);
+});
+
+test("session config option model changes affect subsequent Copilot args", async () => {
+  const { adapter, runner } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", {});
+
+  const result = await adapter.handle("session/set_config_option", {
+    sessionId,
+    configId: "model",
+    value: "gemini-3.5-flash",
+  });
+  await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "hello",
+  });
+
+  assert.equal(
+    result.configOptions.find((option) => option.id === "model").currentValue,
+    "gemini-3.5-flash",
+  );
+  assert.deepEqual(runner.calls[0].options.copilotArgs, [
+    "--allow-all-tools",
+    "--model",
+    "gemini-3.5-flash",
     "--session-id",
     sessionId,
   ]);
