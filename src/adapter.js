@@ -329,7 +329,7 @@ export class CopilotAcpAdapter {
       return this.runDirectCopilotCommand(session, slashCommand);
     }
 
-    const nativeResult = this.handleNativeCommand(session, slashCommand);
+    const nativeResult = await this.handleNativeCommand(session, slashCommand);
     if (nativeResult) {
       return nativeResult;
     }
@@ -344,7 +344,7 @@ export class CopilotAcpAdapter {
     return null;
   }
 
-  handleNativeCommand(session, slashCommand) {
+  async handleNativeCommand(session, slashCommand) {
     switch (slashCommand.name) {
       case "/model":
         return this.handleModelCommand(session, slashCommand);
@@ -441,14 +441,15 @@ export class CopilotAcpAdapter {
     }
   }
 
-  handleModelCommand(session, slashCommand) {
-    const [modelId] = parseCommandArgs(slashCommand.rawArgs);
+  async handleModelCommand(session, slashCommand) {
+    const parsedArgs = parseCommandArgs(slashCommand.rawArgs);
+    const modelId = parsedArgs.length > 1 ? slashCommand.rawArgs : parsedArgs[0];
     if (!modelId) {
       this.sendText(session?.id, `Current model: ${session.modelId || "auto"}`);
       return this.commandDone(slashCommand, { handledBy: "adapter" });
     }
 
-    this.applySessionModel(session, modelId);
+    this.applySessionModel(session, await this.resolveSessionModelId(modelId));
     this.sendText(session?.id, `Model set to ${session.modelId}.`);
     return this.commandDone(slashCommand, { handledBy: "adapter" });
   }
@@ -860,10 +861,13 @@ export class CopilotAcpAdapter {
     };
   }
 
-  setModel(params = {}) {
+  async setModel(params = {}) {
     const session = this.sessions.get(params.sessionId);
     if (session) {
-      this.applySessionModel(session, params.modelId || session.modelId);
+      this.applySessionModel(
+        session,
+        await this.resolveSessionModelId(params.modelId || session.modelId),
+      );
     }
     return {};
   }
@@ -877,7 +881,7 @@ export class CopilotAcpAdapter {
     const configId = params.configId || params.id;
     const value = configOptionValue(params.value);
     if (configId === "model") {
-      this.applySessionModel(session, value || session.modelId);
+      this.applySessionModel(session, await this.resolveSessionModelId(value || session.modelId));
     } else if (configId === "mode") {
       this.applySessionMode(session, value || session.modeId);
     } else if (configId === "allow_all") {
@@ -913,6 +917,36 @@ export class CopilotAcpAdapter {
         currentModelId: session.modelId,
       },
     });
+  }
+
+  async resolveSessionModelId(requestedModel) {
+    const requested = String(requestedModel || "").trim();
+    if (!requested) {
+      return requestedModel;
+    }
+
+    const modelIds = await listConfiguredModels(this.config);
+    const exactId = modelIds.find((modelId) => modelId === requested);
+    if (exactId) {
+      return exactId;
+    }
+
+    const lowerRequested = requested.toLowerCase();
+    const caseInsensitiveId = modelIds.find((modelId) => modelId.toLowerCase() === lowerRequested);
+    if (caseInsensitiveId) {
+      return caseInsensitiveId;
+    }
+
+    const parenthesizedId = requested.match(/\(([^()]+)\)\s*$/)?.[1];
+    if (parenthesizedId) {
+      const match = modelIds.find((modelId) => modelId === parenthesizedId);
+      if (match) {
+        return match;
+      }
+    }
+
+    const nameMatch = modelIds.find((modelId) => modelDisplayName(modelId).toLowerCase() === lowerRequested);
+    return nameMatch || requested;
   }
 
   applySessionMode(session, modeId) {

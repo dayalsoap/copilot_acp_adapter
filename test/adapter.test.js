@@ -43,6 +43,7 @@ function createAdapter(options = {}) {
       loginHeadless: true,
       copilotSettingsPath: join(settingsDir, "settings.json"),
       copilotSessionStatePath: sessionStateDir,
+      ...(options.config || {}),
     },
     runner,
     fetchImpl: options.fetchImpl,
@@ -214,6 +215,32 @@ test("session model and mode changes affect subsequent Copilot args", async () =
     "gpt-5.4",
     "--mode",
     "plan",
+    "--session-id",
+    sessionId,
+  ]);
+});
+
+test("session model changes resolve display names to Copilot model ids", async () => {
+  const { adapter, runner } = createAdapter({
+    config: {
+      copilotModels: ["auto", "claude-fable-5", "gpt-5.4"],
+    },
+  });
+  const { sessionId } = await adapter.handle("session/new", {});
+
+  await adapter.handle("session/set_model", {
+    sessionId,
+    modelId: "Claude Fable 5",
+  });
+  await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "hello",
+  });
+
+  assert.deepEqual(runner.calls[0].options.copilotArgs, [
+    "--allow-all-tools",
+    "--model",
+    "claude-fable-5",
     "--session-id",
     sessionId,
   ]);
