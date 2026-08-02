@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CopilotRunner, buildPtyCommand, detectScriptStyle, isPtyWrapperFailure } from "../src/copilot-runner.js";
+import {
+  CopilotRunner,
+  buildPtyCommand,
+  detectScriptStyle,
+  isPtyWrapperFailure,
+  runProcess,
+} from "../src/copilot-runner.js";
 
 test("builds util-linux script command when requested", () => {
   assert.deepEqual(
@@ -74,4 +80,24 @@ test("forceTty runs direct command when pty wrapping is unavailable", async () =
 
   assert.equal(result.ok, true);
   assert.match(result.stdout, /fallback-ok/);
+});
+
+test("runProcess abort signal terminates the child process", async () => {
+  const controller = new AbortController();
+  const resultPromise = runProcess({
+    command: process.execPath,
+    args: ["-e", "setInterval(() => {}, 1000)"],
+    cwd: process.cwd(),
+    env: process.env,
+    timeoutMs: 0,
+    signal: controller.signal,
+    forceKillAfterMs: 50,
+  });
+
+  controller.abort(new Error("User cancelled"));
+  const result = await resultPromise;
+
+  assert.equal(result.ok, false);
+  assert.equal(result.aborted, true);
+  assert.equal(result.error, "User cancelled");
 });

@@ -31,6 +31,7 @@ export class CopilotRunner {
       cwd: config.cwd,
       env,
       timeoutMs,
+      signal: options.signal,
     });
   }
 
@@ -48,6 +49,7 @@ export class CopilotRunner {
           cwd: config.cwd,
           env,
           timeoutMs: Number(options.timeoutMs ?? config.requestTimeoutMs ?? 0),
+          signal: options.signal,
         });
 
         if (!isPtyWrapperFailure(ptyResult)) {
@@ -67,27 +69,76 @@ export class CopilotRunner {
       timeoutMs: Number(options.timeoutMs ?? config.requestTimeoutMs ?? 0),
       onStdout: options.onStdout,
       onStderr: options.onStderr,
+      signal: options.signal,
     });
   }
 }
 
-export function runProcess({ command, args, input, cwd, env, timeoutMs, onStdout, onStderr }) {
+export function runProcess({
+  command,
+  args,
+  input,
+  cwd,
+  env,
+  timeoutMs,
+  onStdout,
+  onStderr,
+  signal,
+  forceKillAfterMs = 2000,
+}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
 
     let stdout = "";
     let stderr = "";
     let settled = false;
     let timer = null;
+    let forceKillTimer = null;
+    let aborted = false;
+    let timedOut = false;
+    let abortMessage = "";
+
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
+      signal?.removeEventListener?.("abort", onAbort);
+    };
+
+    const terminate = (reason, { cancelled = false, timeout = false } = {}) => {
+      aborted ||= cancelled;
+      timedOut ||= timeout;
+      abortMessage = abortReasonMessage(reason) || "Process cancelled.";
+      killChild(child, "SIGTERM");
+      if (forceKillAfterMs > 0) {
+        forceKillTimer = setTimeout(() => {
+          killChild(child, "SIGKILL");
+        }, forceKillAfterMs);
+      }
+    };
+
+    const onAbort = () => {
+      terminate(signal.reason, { cancelled: true });
+    };
 
     if (timeoutMs > 0) {
       timer = setTimeout(() => {
-        child.kill("SIGTERM");
+        terminate(`Timed out after ${timeoutMs}ms.`, { timeout: true });
       }, timeoutMs);
+    }
+
+    if (signal?.aborted) {
+      terminate(signal.reason, { cancelled: true });
+    } else {
+      signal?.addEventListener?.("abort", onAbort, { once: true });
     }
 
     child.stdout.on("data", (chunk) => {
@@ -102,14 +153,16 @@ export function runProcess({ command, args, input, cwd, env, timeoutMs, onStdout
       onStderr?.(text);
     });
 
+    child.stdin.on("error", () => {
+      // The process may exit between cancellation and stdin writes.
+    });
+
     child.on("error", (error) => {
       if (settled) {
         return;
       }
       settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
+      cleanup();
       resolve({
         ok: false,
         exitCode: null,
@@ -124,27 +177,62 @@ export function runProcess({ command, args, input, cwd, env, timeoutMs, onStdout
         return;
       }
       settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
+      cleanup();
       resolve({
-        ok: exitCode === 0,
+        ok: !aborted && !timedOut && exitCode === 0,
+        aborted,
+        timedOut,
         exitCode,
         signal,
         stdout,
-        stderr:
-          stderr ||
+        stderr: aborted || timedOut
+          ? stderr
+          : stderr ||
           (exitCode === 0
             ? ""
             : `${command} exited with code ${exitCode}. If this is Copilot, run /login or set COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN.`),
+        error: aborted || timedOut ? abortMessage : undefined,
       });
     });
 
-    if (input) {
+    if (input && !signal?.aborted) {
       child.stdin.write(input);
     }
-    child.stdin.end();
+    if (!child.stdin.destroyed) {
+      child.stdin.end();
+    }
   });
+}
+
+function killChild(child, signal) {
+  if (!child.pid) {
+    return;
+  }
+
+  if (process.platform !== "win32") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to signalling the child itself below.
+    }
+  }
+
+  try {
+    child.kill(signal);
+  } catch {
+    // The process may have already exited.
+  }
+}
+
+function abortReasonMessage(reason) {
+  if (!reason) {
+    return "";
+  }
+  if (reason instanceof Error) {
+    return reason.message;
+  }
+  return String(reason);
 }
 
 export function isPtyWrapperFailure(result) {

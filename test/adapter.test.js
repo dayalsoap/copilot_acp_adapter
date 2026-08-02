@@ -26,6 +26,8 @@ function createAdapter(options = {}) {
       return { ok: true, exitCode: 0, stdout: "logged in", stderr: "" };
     },
   };
+  const activeRunner = options.runner || runner;
+  activeRunner.calls ||= calls;
   const adapter = new CopilotAcpAdapter({
     config: {
       cwd: "/tmp",
@@ -45,7 +47,7 @@ function createAdapter(options = {}) {
       copilotSessionStatePath: sessionStateDir,
       ...(options.config || {}),
     },
-    runner,
+    runner: activeRunner,
     fetchImpl: options.fetchImpl,
     notify(method, params) {
       notifications.push({ method, params });
@@ -53,7 +55,7 @@ function createAdapter(options = {}) {
   });
   return {
     adapter,
-    runner,
+    runner: activeRunner,
     notifications,
     settingsPath: join(settingsDir, "settings.json"),
     sessionStateDir,
@@ -244,6 +246,68 @@ test("session model changes resolve display names to Copilot model ids", async (
     "--session-id",
     sessionId,
   ]);
+});
+
+test("session/cancel aborts an in-flight Copilot prompt", async () => {
+  const calls = [];
+  const runner = {
+    calls,
+    runPrompt(prompt, options) {
+      calls.push({ type: "prompt", prompt, options });
+      return new Promise((resolve) => {
+        options.signal.addEventListener("abort", () => {
+          resolve({
+            ok: false,
+            aborted: true,
+            exitCode: null,
+            signal: "SIGTERM",
+            stdout: "",
+            stderr: "",
+            error: options.signal.reason.message,
+          });
+        });
+      });
+    },
+    async runCommand() {
+      throw new Error("runCommand should not be called");
+    },
+  };
+  const { adapter } = createAdapter({ runner });
+  const { sessionId } = await adapter.handle("session/new", {});
+
+  const promptResult = adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "do slow work",
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.signal.aborted, false);
+
+  const cancelResult = await adapter.handle("session/cancel", {
+    sessionId,
+    reason: "User cancelled",
+  });
+  const result = await promptResult;
+
+  assert.deepEqual(cancelResult, {
+    cancelled: true,
+    count: 1,
+    reason: "User cancelled",
+  });
+  assert.equal(calls[0].options.signal.aborted, true);
+  assert.equal(result.stopReason, "cancelled");
+  assert.equal(result._meta.aborted, true);
+  assert.equal(result._meta.error, "User cancelled");
+});
+
+test("session/cancel reports no-op when there is no active operation", async () => {
+  const { adapter } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", {});
+
+  assert.deepEqual(await adapter.handle("session/cancel", { sessionId }), {
+    cancelled: false,
+    count: 0,
+    reason: "User cancelled",
+  });
 });
 
 test("session config option model changes affect subsequent Copilot args", async () => {

@@ -45,6 +45,7 @@ export class CopilotAcpAdapter {
     this.globalEnv = {};
     this.fetchImpl = fetchImpl;
     this.changelogPromise = null;
+    this.activeOperations = new Map();
   }
 
   async handle(method, params = {}) {
@@ -79,7 +80,7 @@ export class CopilotAcpAdapter {
         return this.prompt(params);
       case "cancel":
       case "session/cancel":
-        return { cancelled: false, reason: "Per-request process cancellation is not active." };
+        return this.cancel(params);
       default:
         throw Object.assign(new Error(`Method not found: ${method}`), { code: -32601 });
     }
@@ -232,6 +233,7 @@ export class CopilotAcpAdapter {
 
   closeSession(params = {}) {
     if (params.sessionId) {
+      this.cancel({ sessionId: params.sessionId, reason: "Session closed" });
       this.sessions.delete(params.sessionId);
     }
     return {};
@@ -240,42 +242,91 @@ export class CopilotAcpAdapter {
   async prompt(params = {}) {
     const sessionId = this.ensureSession(params);
     const session = this.sessions.get(sessionId);
-    const prompt = extractPromptText(params);
-    const slashCommand = parseSlashCommand(prompt);
-    const projectSkill = slashCommand
-      ? findProjectSkill(session?.cwd || this.config.cwd, slashCommand.name)
-      : null;
+    const operation = this.startOperation(sessionId);
 
-    if (slashCommand) {
-      const commandResult = await this.handleSlashCommand(
-        session,
-        slashCommand,
-        prompt,
-        projectSkill,
-      );
-      if (commandResult) {
-        return commandResult;
+    try {
+      const prompt = extractPromptText(params);
+      const slashCommand = parseSlashCommand(prompt);
+      const projectSkill = slashCommand
+        ? findProjectSkill(session?.cwd || this.config.cwd, slashCommand.name)
+        : null;
+
+      if (slashCommand) {
+        const commandResult = await this.handleSlashCommand(
+          session,
+          slashCommand,
+          prompt,
+          projectSkill,
+          operation.signal,
+        );
+        if (commandResult) {
+          return commandResult;
+        }
+      }
+
+      const forwardedPrompt = projectSkill
+        ? buildProjectSkillPrompt(projectSkill, slashCommand.rawArgs)
+        : prompt;
+      const result = await this.runner.runPrompt(forwardedPrompt, {
+        cwd: session?.cwd || this.config.cwd,
+        env: { ...this.globalEnv, ...(session?.env || {}) },
+        copilotArgs: buildPromptArgs(this.config.copilotArgs || [], session),
+        signal: operation.signal,
+      });
+
+      this.sendOutput(sessionId, result);
+
+      return {
+        stopReason: result.aborted ? "cancelled" : result.ok ? "end_turn" : "error",
+        _meta: {
+          command: slashCommand,
+          exitCode: result.exitCode,
+          signal: result.signal,
+          error: result.error,
+          aborted: Boolean(result.aborted),
+        },
+      };
+    } finally {
+      operation.finish();
+    }
+  }
+
+  cancel(params = {}) {
+    const sessionId = params.sessionId || params.session_id;
+    const reason = params.reason || "User cancelled";
+    const operations = sessionId
+      ? [...(this.activeOperations.get(sessionId) || [])]
+      : [...this.activeOperations.values()].flatMap((items) => [...items]);
+    let cancelled = 0;
+
+    for (const operation of operations) {
+      if (!operation.controller.signal.aborted) {
+        operation.controller.abort(new Error(reason));
+        cancelled += 1;
       }
     }
 
-    const forwardedPrompt = projectSkill
-      ? buildProjectSkillPrompt(projectSkill, slashCommand.rawArgs)
-      : prompt;
-    const result = await this.runner.runPrompt(forwardedPrompt, {
-      cwd: session?.cwd || this.config.cwd,
-      env: { ...this.globalEnv, ...(session?.env || {}) },
-      copilotArgs: buildPromptArgs(this.config.copilotArgs || [], session),
-    });
+    return {
+      cancelled: cancelled > 0,
+      count: cancelled,
+      reason,
+    };
+  }
 
-    this.sendOutput(sessionId, result);
+  startOperation(sessionId) {
+    const controller = new AbortController();
+    const operation = { controller };
+    const operations = this.activeOperations.get(sessionId) || new Set();
+    operations.add(operation);
+    this.activeOperations.set(sessionId, operations);
 
     return {
-      stopReason: result.ok ? "end_turn" : "error",
-      _meta: {
-        command: slashCommand,
-        exitCode: result.exitCode,
-        signal: result.signal,
-        error: result.error,
+      signal: controller.signal,
+      finish: () => {
+        operations.delete(operation);
+        if (operations.size === 0) {
+          this.activeOperations.delete(sessionId);
+        }
       },
     };
   }
@@ -292,9 +343,9 @@ export class CopilotAcpAdapter {
     }).sessionId;
   }
 
-  async handleSlashCommand(session, slashCommand, prompt, projectSkill = null) {
+  async handleSlashCommand(session, slashCommand, prompt, projectSkill = null, signal) {
     if (slashCommand.name === "/login") {
-      return this.login(session, slashCommand.rawArgs);
+      return this.login(session, slashCommand.rawArgs, signal);
     }
 
     if (slashCommand.name === "/logout") {
@@ -315,7 +366,7 @@ export class CopilotAcpAdapter {
     }
 
     if (slashCommand.name === "/changelog") {
-      return this.handleChangelogCommand(session, slashCommand);
+      return this.handleChangelogCommand(session, slashCommand, signal);
     }
 
     if (slashCommand.name === "/skills") {
@@ -326,10 +377,10 @@ export class CopilotAcpAdapter {
     }
 
     if (DIRECT_COPILOT_COMMANDS[slashCommand.name]) {
-      return this.runDirectCopilotCommand(session, slashCommand);
+      return this.runDirectCopilotCommand(session, slashCommand, signal);
     }
 
-    const nativeResult = await this.handleNativeCommand(session, slashCommand);
+    const nativeResult = await this.handleNativeCommand(session, slashCommand, signal);
     if (nativeResult) {
       return nativeResult;
     }
@@ -344,7 +395,7 @@ export class CopilotAcpAdapter {
     return null;
   }
 
-  async handleNativeCommand(session, slashCommand) {
+  async handleNativeCommand(session, slashCommand, signal) {
     switch (slashCommand.name) {
       case "/model":
         return this.handleModelCommand(session, slashCommand);
@@ -359,7 +410,7 @@ export class CopilotAcpAdapter {
       case "/list-dirs":
         return this.handleListDirsCommand(session, slashCommand);
       case "/diff":
-        return this.handleDiffCommand(session, slashCommand);
+        return this.handleDiffCommand(session, slashCommand, signal);
       case "/allow-all":
         session.allowAll = true;
         this.sendText(session?.id, "All Copilot permissions will be requested for subsequent prompts with `--allow-all`.");
@@ -405,7 +456,7 @@ export class CopilotAcpAdapter {
     }
   }
 
-  async handleChangelogCommand(session, slashCommand) {
+  async handleChangelogCommand(session, slashCommand, signal) {
     try {
       this.changelogPromise ||= fetchCopilotChangelog({
         fetchImpl: this.fetchImpl,
@@ -424,10 +475,11 @@ export class CopilotAcpAdapter {
             cwd: session?.cwd || this.config.cwd,
             env: { ...this.globalEnv, ...(session?.env || {}) },
             copilotArgs: buildPromptArgs(this.config.copilotArgs || [], session),
+            signal,
           },
         );
         this.sendOutput(session?.id, result);
-        return this.commandDone(slashCommand, { handledBy: "adapter", summarized: true }, result.ok ? "end_turn" : "error");
+        return this.commandDone(slashCommand, { handledBy: "adapter", summarized: true }, result.aborted ? "cancelled" : result.ok ? "end_turn" : "error");
       }
 
       this.sendText(session?.id, selected.text);
@@ -477,19 +529,20 @@ export class CopilotAcpAdapter {
     return this.commandDone(slashCommand, { handledBy: "adapter" });
   }
 
-  async handleDiffCommand(session, slashCommand) {
+  async handleDiffCommand(session, slashCommand, signal) {
     const rawArgs = parseCommandArgs(slashCommand.rawArgs);
     const args = ["--no-pager", "diff", "--no-ext-diff", ...(rawArgs.length ? rawArgs : ["HEAD", "--"] )];
     const result = await this.runner.runCommand("git", args, {
       cwd: session?.cwd || this.config.cwd,
       env: { ...this.globalEnv, ...(session?.env || {}) },
       timeoutMs: this.config.requestTimeoutMs,
+      signal,
     });
     this.sendOutput(session?.id, result);
     if (result.ok && !result.stdout && !result.stderr) {
       this.sendText(session?.id, "No tracked changes.");
     }
-    return this.commandDone(slashCommand, { handledBy: "adapter", exitCode: result.exitCode }, result.ok ? "end_turn" : "error");
+    return this.commandDone(slashCommand, { handledBy: "adapter", exitCode: result.exitCode }, result.aborted ? "cancelled" : result.ok ? "end_turn" : "error");
   }
 
   handleUsageCommand(session, slashCommand, contextOnly) {
@@ -812,7 +865,7 @@ export class CopilotAcpAdapter {
     return this.commandDone(slashCommand, { handledBy: "adapter", setting: key });
   }
 
-  async runDirectCopilotCommand(session, slashCommand) {
+  async runDirectCopilotCommand(session, slashCommand, signal) {
     const command = DIRECT_COPILOT_COMMANDS[slashCommand.name];
     const rawArgs = parseCommandArgs(slashCommand.rawArgs);
     const args = [
@@ -829,6 +882,7 @@ export class CopilotAcpAdapter {
       },
       forceTty: Boolean(this.config.forceTtyDirectCommands),
       timeoutMs: this.config.requestTimeoutMs,
+      signal,
       onStdout: (text) => {
         streamed = true;
         this.sendText(session?.id, text);
@@ -848,7 +902,7 @@ export class CopilotAcpAdapter {
       exitCode: result.exitCode,
       signal: result.signal,
       error: result.error,
-    }, result.ok ? "end_turn" : "error");
+    }, result.aborted ? "cancelled" : result.ok ? "end_turn" : "error");
   }
 
   commandDone(command, meta = {}, stopReason = "end_turn") {
@@ -988,7 +1042,7 @@ export class CopilotAcpAdapter {
     return {};
   }
 
-  async login(session, rawArgs) {
+  async login(session, rawArgs, signal) {
     const login = parseLoginArgs(rawArgs, this.config);
     const plan = buildGithubLoginCommand(login, this.config);
 
@@ -1027,6 +1081,7 @@ export class CopilotAcpAdapter {
       cwd: session?.cwd || this.config.cwd,
       env: plan.env,
       timeoutMs: 0,
+      signal,
       onStdout: (text) => {
         streamed = true;
         this.sendText(session?.id, text);
@@ -1041,7 +1096,7 @@ export class CopilotAcpAdapter {
     }
 
     return {
-      stopReason: result.ok ? "end_turn" : "error",
+      stopReason: result.aborted ? "cancelled" : result.ok ? "end_turn" : "error",
       _meta: {
         exitCode: result.exitCode,
         error: result.error,
