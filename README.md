@@ -4,9 +4,10 @@ Dependency-free Node adapter that exposes an ACP v1 JSON-RPC/stdio interface for
 
 The adapter keeps the slash-command surface explicit so clients such as Emacs
 `agent-shell.el` can discover commands even when they do not implement Copilot's
-native terminal UI. It handles ACP/session commands itself, maps Copilot
-management commands to real CLI subcommands, and forwards agent workflow
-commands to Copilot prompt mode.
+native terminal UI. By default it runs a persistent native `copilot --acp`
+backend and proxies prompts, permission requests, and Copilot-owned slash
+commands through that backend, while keeping adapter compatibility helpers for
+client discovery and local-only commands.
 
 ## Usage
 
@@ -14,11 +15,15 @@ commands to Copilot prompt mode.
 npm start
 ```
 
-By default the adapter runs the installed Copilot CLI in non-interactive mode:
-`copilot --allow-all-tools --no-color --output-format json --stream on -p <prompt>`.
-The adapter translates Copilot's JSONL events into ACP `session/update`
-notifications so clients such as `agent-shell.el` can render collapsible
-thought and tool-call sections while Copilot is running.
+By default the adapter runs the installed Copilot CLI as a persistent ACP
+backend:
+`copilot --acp --no-color`.
+This lets Copilot's native permission flow handle filesystem/tool requests the
+same way as the stock Copilot ACP adapter. Set `COPILOT_BACKEND=prompt` to use
+the older non-interactive `copilot -p` fallback; in that mode the adapter
+translates Copilot's JSONL events into ACP `session/update` notifications so
+clients such as `agent-shell.el` can render collapsible thought and tool-call
+sections while Copilot is running.
 
 Install the official GitHub Copilot CLI first:
 
@@ -28,14 +33,18 @@ export PATH="$HOME/.local/bin:$PATH"
 copilot --version
 ```
 
-This adapter has been smoke-tested with GitHub Copilot CLI `1.0.69`.
+This adapter has been smoke-tested with GitHub Copilot CLI `1.0.77`.
 
 Configuration is environment-based:
 
 ```sh
 COPILOT_COMMAND=$HOME/.local/bin/copilot
-COPILOT_ARGS='["--allow-all-tools", "--no-color"]'
-COPILOT_TRANSPORT=prompt # prompt, stdin, argv, or command
+COPILOT_BACKEND=native-acp # native-acp or prompt
+COPILOT_ACP_ARGS='["--acp", "--no-color"]'
+COPILOT_ACP_TRANSPORT=fifo # fifo or stdio
+COPILOT_ACP_REQUEST_TIMEOUT_MS=15000
+COPILOT_ARGS='["--allow-all-tools", "--no-color"]' # prompt fallback only
+COPILOT_TRANSPORT=prompt # prompt fallback only: prompt, stdin, argv, or command
 COPILOT_MODEL=auto
 COPILOT_MODEL_NAME=Auto
 COPILOT_MODELS=auto,claude-sonnet-5,gpt-5.4
@@ -102,8 +111,8 @@ built-in `--acp` mode:
 
 (setq agent-shell-github-environment
       '("COPILOT_COMMAND=/home/jai/.local/bin/copilot"
-        "COPILOT_TRANSPORT=prompt"
-        "COPILOT_ARGS=[\"--allow-all-tools\",\"--no-color\"]"))
+        "COPILOT_BACKEND=native-acp"
+        "COPILOT_ACP_ARGS=[\"--acp\",\"--no-color\"]"))
 ```
 
 The adapter asks Copilot's native ACP server for its filtered model list before
@@ -173,11 +182,19 @@ All commands from `AGENTS.md` are advertised to the ACP client:
 - Help: `/help`, `/changelog`, `/feedback`, `/diagnose`, `/theme`, `/statusline`, `/footer`, `/update`, `/version`, `/experimental`, `/memory`, `/clear`, `/instructions`, `/app`
 - Other: `/ask`, `/chronicle`, `/env`, `/exit`, `/keep-alive`, `/limits`, `/login`, `/logout`, `/new`, `/plan`, `/research`, `/restart`, `/search`, `/settings`, `/subagents`, `/user`, `/voice`
 
-Routing is adapter-owned rather than a proxy to `copilot --acp`:
+Routing defaults to the persistent native `copilot --acp` backend:
 
-- Adapter-native: `/help`, `/agent`, `/model`, `/autopilot`, `/cwd`, `/add-dir`, `/list-dirs`, `/diff`, `/allow-all`, `/reset-allowed-tools`, `/resume`, `/rename`, `/context`, `/usage`, `/session`, `/new`, `/clear`, `/login`, `/logout`, `/settings`, `/skills` project listing, `/subagents`, `/theme`, `/experimental`, `/memory`, `/keep-alive`, `/limits`, and `/exit`.
-- Direct Copilot CLI subcommands: `/init`, `/skills add/remove/list --json`, `/mcp`, `/plugin`, `/update`, and `/version`.
-- Copilot prompt mode: remaining agent workflows such as `/review`, `/plan`, `/research`, `/delegate`, `/tasks`, and normal prompts.
+- Native ACP proxy: normal prompts and Copilot-owned slash commands, including
+  permission and agent-environment commands such as `/allow-all`, `/add-dir`,
+  `/list-dirs`, `/cwd`, `/reset-allowed-tools`, `/agent`, `/model`,
+  `/autopilot`, `/skills`, `/mcp`, and `/plugin`.
+- Adapter compatibility helpers: `/help`, `/login`, `/logout`, `/changelog`,
+  `/diff`, `/settings`, `/subagents`, `/theme`, `/experimental`, `/memory`,
+  `/keep-alive`, `/limits`, `/new`, `/clear`, `/exit`, `/version`, and
+  `/update`.
+- Prompt fallback (`COPILOT_BACKEND=prompt`): adapter-owned routing remains
+  available for older CLI builds or debugging, but it does not provide live
+  native ACP permission requests.
 
 `session/new`'s `cwd` parameter is treated as the client-provided working
 directory. In Emacs agent-shell, this is controlled by
@@ -215,12 +232,12 @@ per-agent model settings from `COPILOT_SETTINGS_PATH` or
 git-root fallback for project skills. It checks `.github/skills/`,
 `.agents/skills/`, and `.claude/skills/`. Discovered project skills are also
 included in ACP `available_commands_update` notifications, so Emacs agent-shell
-can offer them in its slash-command completion. Because Copilot CLI prompt mode
-does not apply interactive skill slash commands itself, the adapter expands a
-matched project `SKILL.md`, its invocation arguments, and its base directory
-into the forwarded prompt. This also lets skill instructions refer to bundled
-resources by relative path. Other `/skills` subcommands are delegated to the
-Copilot CLI.
+can offer them in its slash-command completion. In the default native ACP
+backend, `/skills` prompts are proxied to Copilot. In the prompt fallback,
+Copilot CLI does not apply interactive skill slash commands itself, so the
+adapter expands a matched project `SKILL.md`, its invocation arguments, and its
+base directory into the forwarded prompt. This also lets skill instructions
+refer to bundled resources by relative path.
 
 ### Project skill smoke tests
 

@@ -9,6 +9,10 @@ export function loadConfig(env = process.env) {
 
   return {
     copilotCommand: env.COPILOT_COMMAND || defaultCopilotCommand(),
+    copilotBackend: env.COPILOT_BACKEND || "native-acp",
+    copilotAcpArgs: parseArgs(env.COPILOT_ACP_ARGS || "--acp --no-color"),
+    copilotAcpTransport: env.COPILOT_ACP_TRANSPORT || "fifo",
+    copilotAcpRequestTimeoutMs: Number(env.COPILOT_ACP_REQUEST_TIMEOUT_MS || 15000),
     copilotArgs: parseArgs(env.COPILOT_ARGS || "--allow-all-tools --no-color"),
     copilotTransport: env.COPILOT_TRANSPORT || "prompt",
     copilotModel: env.COPILOT_MODEL || findArgValue(parseArgs(env.COPILOT_ARGS || ""), "--model") || "auto",

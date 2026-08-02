@@ -87,6 +87,180 @@ export class CopilotAcpAdapter {
     }
   }
 
+  shouldHandleLocally(method, params = {}) {
+    switch (method) {
+      case "authenticate":
+      case "logout":
+      case "agent/commands":
+      case "commands/list":
+      case "_commands/list":
+        return true;
+      case "prompt":
+      case "session/prompt":
+        return this.shouldHandlePromptLocally(params);
+      default:
+        return false;
+    }
+  }
+
+  shouldHandlePromptLocally(params = {}) {
+    const slashCommand = parseSlashCommand(extractPromptText(params));
+    if (!slashCommand) {
+      return false;
+    }
+
+    if (this.config.copilotBackend === "native-acp") {
+      if (
+        [
+          "/login",
+          "/logout",
+          "/help",
+          "/changelog",
+          "/diff",
+          "/settings",
+          "/subagents",
+          "/theme",
+          "/experimental",
+          "/memory",
+          "/keep-alive",
+          "/limits",
+          "/new",
+          "/clear",
+          "/exit",
+          "/version",
+          "/update",
+        ].includes(slashCommand.name)
+      ) {
+        return true;
+      }
+
+      return false;
+    }
+
+    if (
+      [
+        "/login",
+        "/logout",
+        "/help",
+        "/changelog",
+        "/model",
+        "/agent",
+        "/autopilot",
+        "/cwd",
+        "/add-dir",
+        "/list-dirs",
+        "/diff",
+        "/allow-all",
+        "/reset-allowed-tools",
+        "/resume",
+        "/rename",
+        "/session",
+        "/context",
+        "/usage",
+        "/theme",
+        "/experimental",
+        "/memory",
+        "/keep-alive",
+        "/limits",
+        "/new",
+        "/clear",
+        "/exit",
+        "/subagents",
+        "/settings",
+      ].includes(slashCommand.name)
+    ) {
+      return true;
+    }
+
+    if (DIRECT_COPILOT_COMMANDS[slashCommand.name]) {
+      return true;
+    }
+
+    if (slashCommand.name === "/skills") {
+      const args = parseCommandArgs(slashCommand.rawArgs);
+      return args.length <= 1 && (!args[0] || args[0] === "list");
+    }
+
+    return false;
+  }
+
+  enhanceInitialize(nativeResult = {}) {
+    const local = this.initialize();
+    return {
+      ...nativeResult,
+      protocolVersion: nativeResult.protocolVersion ?? local.protocolVersion,
+      agentCapabilities: {
+        ...(nativeResult.agentCapabilities || {}),
+        auth: {
+          ...(nativeResult.agentCapabilities?.auth || {}),
+          ...(local.agentCapabilities?.auth || {}),
+        },
+        sessionCapabilities: {
+          ...(nativeResult.agentCapabilities?.sessionCapabilities || {}),
+          ...(local.agentCapabilities?.sessionCapabilities || {}),
+        },
+        _meta: {
+          ...(nativeResult.agentCapabilities?._meta || {}),
+          ...(local.agentCapabilities?._meta || {}),
+          backend: "native-acp-proxy",
+        },
+      },
+      agentInfo: {
+        ...(nativeResult.agentInfo || {}),
+        name: "copilot-acp-adapter",
+        title: nativeResult.agentInfo?.title || "Copilot ACP Adapter",
+        _meta: {
+          nativeAgentInfo: nativeResult.agentInfo,
+        },
+      },
+      authMethods: mergeAuthMethods(nativeResult.authMethods, local.authMethods),
+    };
+  }
+
+  async adoptNativeSession(params = {}, nativeResult = {}) {
+    const sessionId = nativeResult.sessionId || params.sessionId || randomUUID();
+    const session = {
+      id: sessionId,
+      cwd: nativeResult.cwd || params.cwd || this.config.cwd,
+      additionalDirectories: params.additionalDirectories || [],
+      env: {},
+      modelId:
+        nativeResult.models?.currentModelId ||
+        configOptionCurrentValue(nativeResult.configOptions, "model") ||
+        this.config.copilotModel ||
+        "auto",
+      modeId: normalizeModeId(
+        nativeResult.modes?.currentModeId ||
+        configOptionCurrentValue(nativeResult.configOptions, "mode") ||
+        this.config.copilotMode ||
+        "agent",
+      ),
+      copilotSessionId: sessionId,
+      resumeExisting: false,
+      name: params.name || "",
+      allowAll: false,
+      agentName: "",
+      maxAiCredits: null,
+      createdAt: new Date().toISOString(),
+    };
+    this.sessions.set(sessionId, session);
+    this.sendAvailableCommands(sessionId);
+    return this.enhanceSessionStartResult(session, nativeResult);
+  }
+
+  async enhanceSessionStartResult(session, nativeResult = {}) {
+    const fallbackModels = await sessionModels(session, this.config);
+    const models = nativeResult.models?.availableModels?.length ? nativeResult.models : fallbackModels;
+    return {
+      ...nativeResult,
+      sessionId: session.id,
+      cwd: nativeResult.cwd || session.cwd,
+      models,
+      modes: nativeResult.modes || sessionModes(session),
+      configOptions: mergeConfigOptions(nativeResult.configOptions, sessionConfigOptions(session, models)),
+    };
+  }
+
   initialize() {
     return {
       protocolVersion: 1,
@@ -1224,6 +1398,37 @@ function extractPromptText(params) {
   return "";
 }
 
+function mergeAuthMethods(nativeMethods = [], localMethods = []) {
+  const result = [];
+  const seen = new Set();
+  for (const method of [...(nativeMethods || []), ...(localMethods || [])]) {
+    if (!method?.id || seen.has(method.id)) {
+      continue;
+    }
+    seen.add(method.id);
+    result.push(method);
+  }
+  return result;
+}
+
+function mergeConfigOptions(nativeOptions = [], localOptions = []) {
+  const result = [];
+  const seen = new Set();
+  for (const option of [...(nativeOptions || []), ...(localOptions || [])]) {
+    const key = option?.id || option?.category;
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(option);
+  }
+  return result;
+}
+
+function configOptionCurrentValue(configOptions = [], id) {
+  return (configOptions || []).find((option) => option?.id === id || option?.category === id)?.currentValue;
+}
+
 function commandHelpText(rawArgs) {
   const [topic] = parseCommandArgs(rawArgs);
   if (topic) {
@@ -1249,15 +1454,15 @@ function commandHelpText(rawArgs) {
     lines.push(`/${command.name} - ${command.description}`);
   }
   lines.push("");
-  lines.push("Management commands such as /skills, /mcp, /plugin, /init, /update, and /version run direct Copilot CLI subcommands.");
-  lines.push("Interactive configuration commands such as /subagents are handled natively by the adapter where Copilot exposes settings.");
-  lines.push("Agent workflow commands are forwarded to Copilot prompt mode with this ACP session's Copilot session id.");
+  lines.push("By default, prompts and Copilot-owned slash commands are proxied to the persistent native Copilot ACP backend.");
+  lines.push("The adapter handles compatibility helpers such as /help, /login, /logout, /settings, /subagents, /diff, /new, and /clear.");
+  lines.push("Set COPILOT_BACKEND=prompt to use the older non-interactive copilot -p fallback.");
   return lines.join("\n");
 }
 
 function commandHelpRouting(name) {
   if (DIRECT_COPILOT_COMMANDS[name]) {
-    return "Handled by direct Copilot CLI subcommand routing.";
+    return "Handled by direct Copilot CLI subcommand routing in prompt fallback mode, or proxied to native Copilot ACP by default.";
   }
   if (
     [
@@ -1291,9 +1496,9 @@ function commandHelpRouting(name) {
       "/limits",
     ].includes(name)
   ) {
-    return "Handled by the ACP adapter.";
+    return "Handled by the adapter in prompt fallback mode, or proxied to native Copilot ACP when Copilot owns the command.";
   }
-  return "Forwarded to Copilot prompt mode.";
+  return "Proxied to native Copilot ACP by default, or forwarded to Copilot prompt mode in prompt fallback mode.";
 }
 
 function skillsSummary(projectSkills) {

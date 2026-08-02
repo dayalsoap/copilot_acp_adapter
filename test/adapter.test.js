@@ -310,6 +310,17 @@ test("session/cancel reports no-op when there is no active operation", async () 
   });
 });
 
+test("native backend mode proxies permission slash commands", () => {
+  const { adapter } = createAdapter({
+    config: { copilotBackend: "native-acp" },
+  });
+
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/add-dir ../logs" }), false);
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/allow-all" }), false);
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/autopilot" }), false);
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/settings" }), true);
+});
+
 test("prompt JSON events are forwarded as agent-shell tool and thought updates", async () => {
   const runner = {
     calls: [],

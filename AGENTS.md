@@ -16,15 +16,15 @@ For login, I need to be able to support logging in via github.com and github ent
 
 ## Current Implementation Handoff
 
-This repository is currently a dependency-free Node.js ACP adapter scaffold. It exposes an ACP v1-style JSON-RPC/stdio server and forwards prompts, including slash commands, to the installed GitHub Copilot CLI.
+This repository is currently a dependency-free Node.js ACP adapter. It exposes an ACP v1-style JSON-RPC/stdio server and, by default, proxies prompts, permission requests, and Copilot-owned slash commands to a persistent native `copilot --acp` subprocess.
 
 ### Local Tooling State
 
 - Node.js is available and the package uses native `node --test`; no npm dependencies are required.
 - The official GitHub Copilot CLI is installed at `/home/jai/.local/bin/copilot`.
-- The installed Copilot CLI was verified as `GitHub Copilot CLI 1.0.69`.
+- The installed Copilot CLI was verified as `GitHub Copilot CLI 1.0.77`.
 - The adapter defaults to `/home/jai/.local/bin/copilot` when present, otherwise `copilot`.
-- The current machine was not authenticated when live prompt testing was last attempted.
+- Native ACP initialization and proxy transport smoke testing succeeded on this machine; full prompt testing still requires authentication.
 
 ### Project Layout
 
@@ -66,17 +66,21 @@ node -e 'const m=JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize"}); proce
 
 ### Runtime Defaults
 
-The adapter currently runs Copilot prompts as:
+The adapter currently runs Copilot as a persistent native ACP backend:
 
 ```sh
-/home/jai/.local/bin/copilot --allow-all-tools --no-color --output-format json --stream on -p "<prompt>"
+/home/jai/.local/bin/copilot --acp --no-color
 ```
 
 Relevant environment variables:
 
 - `COPILOT_COMMAND`: override Copilot executable.
-- `COPILOT_ARGS`: shell-like string or JSON array; defaults to `--allow-all-tools --no-color`.
-- `COPILOT_TRANSPORT`: `prompt` by default; also supports `stdin`, `argv`, and `command`.
+- `COPILOT_BACKEND`: backend mode; defaults to `native-acp`. Set to `prompt` for the older `copilot -p` fallback.
+- `COPILOT_ACP_ARGS`: shell-like string or JSON array for the persistent native backend; defaults to `--acp --no-color`.
+- `COPILOT_ACP_TRANSPORT`: native ACP subprocess transport; defaults to `fifo`. `stdio` is available for debugging, but nested `copilot --acp` stdio exits when the adapter itself is launched with piped stdin.
+- `COPILOT_ACP_REQUEST_TIMEOUT_MS`: native ACP request timeout; defaults to 15000 ms.
+- `COPILOT_ARGS`: prompt fallback args; defaults to `--allow-all-tools --no-color`.
+- `COPILOT_TRANSPORT`: prompt fallback transport; supports `prompt`, `stdin`, `argv`, and `command`.
 - `COPILOT_MODEL` / `COPILOT_MODEL_NAME`: model id/display name surfaced to `agent-shell` and passed as `--model` when not `auto`.
 - `COPILOT_MODE`: initial session mode for `agent-shell`; supported display values are `agent`, `plan`, and `autopilot`.
 - `GITHUB_ENTERPRISE_HOST` or `GHE_HOST`: Enterprise host for `/login enterprise`.
@@ -93,7 +97,7 @@ Relevant environment variables:
 - `/login api-key <token>` stores the token in adapter session env as `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_TOKEN`.
 - Login runs headless by default with `BROWSER=echo` and `CI=1`, so Emacs receives a copyable device-flow URL/code instead of Copilot trying to open a browser on the host running the adapter.
 - ACP `authenticate` supports method IDs `github.com`, `github-enterprise`, and `api-key`.
-- ACP `logout` currently only clears adapter-held token environment. Copilot CLI 1.0.69 does not expose a top-level `copilot logout`; `/logout` is an interactive slash command.
+- ACP `logout` currently only clears adapter-held token environment. Copilot CLI 1.0.77 does not expose a top-level `copilot logout`; `/logout` is an interactive slash command.
 
 ### Known Gaps / Next Work
 
@@ -102,7 +106,7 @@ Relevant environment variables:
 - `acp.el` uses newline-delimited JSON, not `Content-Length` framing. The adapter now auto-detects incoming framing and replies with newline JSON for Emacs clients.
 - `agent-shell` defaults `agent-shell-cwd` to the project root. To start in the current Emacs directory, set `agent-shell-cwd-function` to `(lambda () default-directory)` before starting the shell.
 - The richer `agent-shell` header comes from `session/new` `models` and `modes` fields. The adapter displays the configured model/mode, but cannot discover Copilot's server-selected `auto` model unless Copilot exposes it.
-- Validate whether running every slash command through `copilot -p "/command"` behaves like interactive slash commands. If some commands require a persistent TTY session, the runner will need a persistent interactive Copilot process instead of one subprocess per prompt.
-- Add integration tests once authentication is available. Start with `/help`, `/skills`, `/agent`, `/mcp`, and a plain prompt.
+- The default backend now proxies most traffic to a persistent native `copilot --acp` subprocess. Validate permission round-trips in the real Emacs `agent-shell` client, especially `/add-dir`, `/allow-all`, and tool approvals.
+- `COPILOT_BACKEND=prompt` keeps the older subprocess-per-prompt path for fallback/debugging, but it does not provide native ACP permission prompts.
+- Add integration tests once authentication is available. Start with `/help`, `/skills`, `/agent`, `/mcp`, `/add-dir`, and a plain prompt.
 - Replace generic command descriptions in `src/commands.js` with the exact text from `copilot help commands` if client UX needs richer command menus.
-- Decide whether this adapter should wrap Copilot CLI's built-in `--acp` mode, proxy it, or continue using direct prompt subprocesses with custom command discovery.
