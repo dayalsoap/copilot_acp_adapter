@@ -6,6 +6,7 @@ import {
   detectScriptStyle,
   isPtyWrapperFailure,
   runProcess,
+  withJsonEventArgs,
 } from "../src/copilot-runner.js";
 
 test("builds util-linux script command when requested", () => {
@@ -80,6 +81,26 @@ test("forceTty runs direct command when pty wrapping is unavailable", async () =
 
   assert.equal(result.ok, true);
   assert.match(result.stdout, /fallback-ok/);
+});
+
+test("prompt args default to Copilot JSON event streaming", async () => {
+  assert.deepEqual(
+    withJsonEventArgs(["--allow-all-tools", "--silent", "--no-color", "--output-format", "text"]),
+    ["--allow-all-tools", "--no-color", "--output-format", "json", "--stream", "on"],
+  );
+
+  const runner = new CopilotRunner({
+    copilotCommand: "/bin/echo",
+    copilotTransport: "prompt",
+    copilotArgs: ["--allow-all-tools", "--silent", "--no-color"],
+    cwd: process.cwd(),
+    requestTimeoutMs: 0,
+  });
+  const result = await runner.runPrompt("hello");
+
+  assert.equal(result.ok, true);
+  assert.match(result.stdout, /--output-format json --stream on -p hello/);
+  assert.equal(result.stdout.includes("--silent"), false);
 });
 
 test("runProcess abort signal terminates the child process", async () => {

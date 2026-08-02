@@ -11,6 +11,10 @@ export class CopilotRunner {
     const timeoutMs = Number(config.requestTimeoutMs || 0);
 
     let args = [...(config.copilotArgs || [])];
+    if (config.copilotTransport === "prompt" && options.jsonEvents !== false) {
+      args = withJsonEventArgs(args);
+    }
+
     if (config.copilotTransport === "prompt") {
       args = [...args, "-p", prompt];
     }
@@ -32,6 +36,8 @@ export class CopilotRunner {
       env,
       timeoutMs,
       signal: options.signal,
+      onStdout: options.onStdout,
+      onStderr: options.onStderr,
     });
   }
 
@@ -233,6 +239,26 @@ function abortReasonMessage(reason) {
     return reason.message;
   }
   return String(reason);
+}
+
+export function withJsonEventArgs(args) {
+  const result = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--silent" || arg === "-s") {
+      continue;
+    }
+    if (arg === "--output-format" || arg === "--stream") {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--output-format=") || arg.startsWith("--stream=")) {
+      continue;
+    }
+    result.push(arg);
+  }
+  result.push("--output-format", "json", "--stream", "on");
+  return result;
 }
 
 export function isPtyWrapperFailure(result) {

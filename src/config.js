@@ -9,7 +9,7 @@ export function loadConfig(env = process.env) {
 
   return {
     copilotCommand: env.COPILOT_COMMAND || defaultCopilotCommand(),
-    copilotArgs: parseArgs(env.COPILOT_ARGS || "--allow-all-tools --silent --no-color"),
+    copilotArgs: parseArgs(env.COPILOT_ARGS || "--allow-all-tools --no-color"),
     copilotTransport: env.COPILOT_TRANSPORT || "prompt",
     copilotModel: env.COPILOT_MODEL || findArgValue(parseArgs(env.COPILOT_ARGS || ""), "--model") || "auto",
     copilotModelName: env.COPILOT_MODEL_NAME || "",

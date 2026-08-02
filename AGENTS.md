@@ -69,13 +69,13 @@ node -e 'const m=JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize"}); proce
 The adapter currently runs Copilot prompts as:
 
 ```sh
-/home/jai/.local/bin/copilot --allow-all-tools --silent --no-color -p "<prompt>"
+/home/jai/.local/bin/copilot --allow-all-tools --no-color --output-format json --stream on -p "<prompt>"
 ```
 
 Relevant environment variables:
 
 - `COPILOT_COMMAND`: override Copilot executable.
-- `COPILOT_ARGS`: shell-like string or JSON array; defaults to `--allow-all-tools --silent --no-color`.
+- `COPILOT_ARGS`: shell-like string or JSON array; defaults to `--allow-all-tools --no-color`.
 - `COPILOT_TRANSPORT`: `prompt` by default; also supports `stdin`, `argv`, and `command`.
 - `COPILOT_MODEL` / `COPILOT_MODEL_NAME`: model id/display name surfaced to `agent-shell` and passed as `--model` when not `auto`.
 - `COPILOT_MODE`: initial session mode for `agent-shell`; supported display values are `agent`, `plan`, and `autopilot`.

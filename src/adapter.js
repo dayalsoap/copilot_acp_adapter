@@ -15,6 +15,7 @@ import {
   parseSlashCommand,
 } from "./commands.js";
 import { listConfiguredModels, modelDisplayName } from "./models.js";
+import { createCopilotJsonEventForwarder } from "./copilot-json-events.js";
 import { discoverProjectAgents, discoverProjectSkills } from "./project-agents.js";
 import {
   getSetting,
@@ -267,14 +268,23 @@ export class CopilotAcpAdapter {
       const forwardedPrompt = projectSkill
         ? buildProjectSkillPrompt(projectSkill, slashCommand.rawArgs)
         : prompt;
+      const eventForwarder = this.createJsonEventForwarder(sessionId);
       const result = await this.runner.runPrompt(forwardedPrompt, {
         cwd: session?.cwd || this.config.cwd,
         env: { ...this.globalEnv, ...(session?.env || {}) },
         copilotArgs: buildPromptArgs(this.config.copilotArgs || [], session),
         signal: operation.signal,
+        onStdout: (text) => eventForwarder.write(text),
       });
+      eventForwarder.end();
 
-      this.sendOutput(sessionId, result);
+      if (eventForwarder.sawJson) {
+        if (result.stderr) {
+          this.sendText(sessionId, result.stderr, "agent_message_chunk", { stream: "stderr" });
+        }
+      } else {
+        this.sendOutput(sessionId, result);
+      }
 
       return {
         stopReason: result.aborted ? "cancelled" : result.ok ? "end_turn" : "error",
@@ -1135,6 +1145,44 @@ export class CopilotAcpAdapter {
     if (result.stderr) {
       this.sendText(sessionId, result.stderr, "agent_message_chunk", { stream: "stderr" });
     }
+  }
+
+  createJsonEventForwarder(sessionId) {
+    return createCopilotJsonEventForwarder({
+      sendAgentMessage: (text) => this.sendText(sessionId, text, "agent_message_chunk"),
+      sendThought: (text) => this.sendText(sessionId, text, "agent_thought_chunk"),
+      sendToolCall: (toolCall) => this.sendToolCall(sessionId, "tool_call", toolCall),
+      sendToolCallUpdate: (toolCall) => this.sendToolCall(sessionId, "tool_call_update", toolCall),
+    });
+  }
+
+  sendToolCall(sessionId, sessionUpdate, toolCall) {
+    if (!sessionId || !toolCall?.toolCallId) {
+      return;
+    }
+    const update = {
+      sessionUpdate,
+      toolCallId: toolCall.toolCallId,
+      title: toolCall.title || "Tool",
+      kind: toolCall.kind || "other",
+      status: toolCall.status || "in_progress",
+      rawInput: toolCall.rawInput || {},
+    };
+    if (toolCall.output) {
+      update.content = [
+        {
+          type: "content",
+          content: {
+            type: "text",
+            text: toolCall.output,
+          },
+        },
+      ];
+    }
+    this.notify("session/update", {
+      sessionId,
+      update,
+    });
   }
 
   sendText(sessionId, text, sessionUpdate = "agent_message_chunk", meta = {}) {

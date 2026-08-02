@@ -310,6 +310,130 @@ test("session/cancel reports no-op when there is no active operation", async () 
   });
 });
 
+test("prompt JSON events are forwarded as agent-shell tool and thought updates", async () => {
+  const runner = {
+    calls: [],
+    async runPrompt(prompt, options) {
+      runner.calls.push({ type: "prompt", prompt, options });
+      for (const event of [
+        {
+          type: "session.auto_mode_resolved",
+          data: { chosenModel: "gpt-5-mini", reasoningBucket: "low" },
+        },
+        {
+          type: "assistant.tool_call_delta",
+          data: {
+            toolCallId: "call-1",
+            toolName: "bash",
+            toolType: "function",
+            inputDelta: "{\"command\"",
+          },
+        },
+        {
+          type: "assistant.tool_call_delta",
+          data: {
+            toolCallId: "call-1",
+            toolName: "bash",
+            toolType: "function",
+            inputDelta: ":\"pwd\",\"description\":\"Print working directory\"}",
+          },
+        },
+        {
+          type: "assistant.message",
+          data: {
+            messageId: "msg-1",
+            content: "I will inspect the directory.",
+            toolRequests: [
+              {
+                toolCallId: "call-1",
+                name: "bash",
+                arguments: { command: "pwd", description: "Print working directory" },
+                intentionSummary: "Print working directory",
+              },
+            ],
+          },
+        },
+        {
+          type: "tool.execution_partial_result",
+          data: { toolCallId: "call-1", partialOutput: "/repo\n" },
+        },
+        {
+          type: "tool.execution_complete",
+          data: {
+            toolCallId: "call-1",
+            success: true,
+            result: { content: "/repo\n<shellId: 0 completed with exit code 0>" },
+          },
+        },
+        {
+          type: "assistant.message",
+          data: {
+            messageId: "msg-2",
+            content: "Current directory: /repo",
+            toolRequests: [],
+          },
+        },
+        { type: "result", exitCode: 0 },
+      ]) {
+        options.onStdout?.(`${JSON.stringify(event)}\n`);
+      }
+      return { ok: true, exitCode: 0, stdout: "json events should not be rendered", stderr: "" };
+    },
+    async runCommand() {
+      throw new Error("runCommand should not be called");
+    },
+  };
+  const { adapter, notifications } = createAdapter({ runner });
+  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+
+  const result = await adapter.handle("session/prompt", { sessionId, prompt: "where am I?" });
+  const updates = notifications
+    .filter((notification) => notification.method === "session/update")
+    .map((notification) => notification.params.update);
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(
+    updates.some(
+      (update) =>
+        update.sessionUpdate === "agent_thought_chunk" &&
+        update.content.text.includes("Auto selected model `gpt-5-mini`"),
+    ),
+    true,
+  );
+  assert.equal(
+    updates.some(
+      (update) =>
+        update.sessionUpdate === "tool_call" &&
+        update.toolCallId === "call-1" &&
+        update.kind === "execute" &&
+        update.rawInput.command === "pwd",
+    ),
+    true,
+  );
+  assert.equal(
+    updates.some(
+      (update) =>
+        update.sessionUpdate === "tool_call_update" &&
+        update.toolCallId === "call-1" &&
+        update.status === "completed" &&
+        update.content[0].content.text.includes("completed with exit code 0"),
+    ),
+    true,
+  );
+  assert.equal(
+    updates.some(
+      (update) =>
+        update.sessionUpdate === "agent_message_chunk" &&
+        update.content.text === "Current directory: /repo",
+    ),
+    true,
+  );
+  assert.equal(
+    updates.some((update) => update.content?.text === "json events should not be rendered"),
+    false,
+  );
+});
+
 test("session config option model changes affect subsequent Copilot args", async () => {
   const { adapter, runner } = createAdapter();
   const { sessionId } = await adapter.handle("session/new", {});

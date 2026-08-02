@@ -15,7 +15,10 @@ npm start
 ```
 
 By default the adapter runs the installed Copilot CLI in non-interactive mode:
-`copilot --allow-all-tools --silent --no-color -p <prompt>`.
+`copilot --allow-all-tools --no-color --output-format json --stream on -p <prompt>`.
+The adapter translates Copilot's JSONL events into ACP `session/update`
+notifications so clients such as `agent-shell.el` can render collapsible
+thought and tool-call sections while Copilot is running.
 
 Install the official GitHub Copilot CLI first:
 
@@ -31,7 +34,7 @@ Configuration is environment-based:
 
 ```sh
 COPILOT_COMMAND=$HOME/.local/bin/copilot
-COPILOT_ARGS='["--allow-all-tools", "--silent", "--no-color"]'
+COPILOT_ARGS='["--allow-all-tools", "--no-color"]'
 COPILOT_TRANSPORT=prompt # prompt, stdin, argv, or command
 COPILOT_MODEL=auto
 COPILOT_MODEL_NAME=Auto
@@ -100,7 +103,7 @@ built-in `--acp` mode:
 (setq agent-shell-github-environment
       '("COPILOT_COMMAND=/home/jai/.local/bin/copilot"
         "COPILOT_TRANSPORT=prompt"
-        "COPILOT_ARGS=[\"--allow-all-tools\",\"--silent\",\"--no-color\"]"))
+        "COPILOT_ARGS=[\"--allow-all-tools\",\"--no-color\"]"))
 ```
 
 The adapter asks Copilot's native ACP server for its filtered model list before
