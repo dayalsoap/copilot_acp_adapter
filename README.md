@@ -190,8 +190,8 @@ Routing defaults to the persistent native `copilot --acp` backend:
   `/autopilot`, `/skills`, `/mcp`, and `/plugin`.
 - Adapter compatibility helpers: `/help`, `/login`, `/logout`, `/changelog`,
   `/diff`, `/settings`, `/subagents`, `/theme`, `/experimental`, `/memory`,
-  `/keep-alive`, `/limits`, `/new`, `/clear`, `/exit`, `/version`, and
-  `/update`.
+  `/keep-alive`, `/limits`, `/exit`, `/version`, and `/update`. Stateful
+  session commands such as `/new` and `/clear` are proxied to native Copilot.
 - Prompt fallback (`COPILOT_BACKEND=prompt`): adapter-owned routing remains
   available for older CLI builds or debugging, but it does not provide live
   native ACP permission requests.

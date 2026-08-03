@@ -124,8 +124,6 @@ export class CopilotAcpAdapter {
           "/memory",
           "/keep-alive",
           "/limits",
-          "/new",
-          "/clear",
           "/exit",
           "/version",
           "/update",
@@ -1455,7 +1453,7 @@ function commandHelpText(rawArgs) {
   }
   lines.push("");
   lines.push("By default, prompts and Copilot-owned slash commands are proxied to the persistent native Copilot ACP backend.");
-  lines.push("The adapter handles compatibility helpers such as /help, /login, /logout, /settings, /subagents, /diff, /new, and /clear.");
+  lines.push("The adapter handles compatibility helpers such as /help, /login, /logout, /settings, /subagents, and /diff.");
   lines.push("Set COPILOT_BACKEND=prompt to use the older non-interactive copilot -p fallback.");
   return lines.join("\n");
 }

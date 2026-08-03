@@ -310,7 +310,7 @@ test("session/cancel reports no-op when there is no active operation", async () 
   });
 });
 
-test("native backend mode proxies permission slash commands", () => {
+test("native backend mode proxies Copilot-owned slash commands", () => {
   const { adapter } = createAdapter({
     config: { copilotBackend: "native-acp" },
   });
@@ -318,7 +318,20 @@ test("native backend mode proxies permission slash commands", () => {
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/add-dir ../logs" }), false);
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/allow-all" }), false);
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/autopilot" }), false);
+  assert.equal(adapter.shouldHandleLocally("session/prompt", {
+    prompt: [{ type: "text", text: "/new" }],
+  }), false);
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/clear" }), false);
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/settings" }), true);
+});
+
+test("prompt fallback keeps new and clear local", () => {
+  const { adapter } = createAdapter({
+    config: { copilotBackend: "prompt" },
+  });
+
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/new" }), true);
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/clear" }), true);
 });
 
 test("prompt JSON events are forwarded as agent-shell tool and thought updates", async () => {
