@@ -123,6 +123,43 @@ test("session/new exposes model and mode metadata for agent-shell header", async
   assert.equal(result.modes.availableModes.some((mode) => mode.id === "plan"), true);
 });
 
+test("native command updates retain adapter commands and project skills", async () => {
+  const { adapter } = createAdapter();
+  const repo = mkdtempSync(join(tmpdir(), "copilot-acp-native-commands-"));
+  mkdirSync(join(repo, ".git"));
+  mkdirSync(join(repo, ".github", "skills", "adapter-smoke-test"), { recursive: true });
+  writeFileSync(
+    join(repo, ".github", "skills", "adapter-smoke-test", "SKILL.md"),
+    "---\nname: adapter-smoke-test\ndescription: Run the adapter smoke test\n---\n",
+  );
+  const { sessionId } = await adapter.handle("session/new", { cwd: repo });
+
+  const message = adapter.enhanceNativeMessage({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId,
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [
+          { name: "help", description: "Native help" },
+          { name: "refine", description: "Native-only command" },
+        ],
+      },
+    },
+  });
+  const commands = message.params.update.availableCommands;
+
+  assert.deepEqual(commands.find((command) => command.name === "help"), {
+    name: "help",
+    description: "Native help",
+  });
+  assert.equal(commands.filter((command) => command.name === "help").length, 1);
+  assert.equal(commands.some((command) => command.name === "refine"), true);
+  assert.equal(commands.some((command) => command.name === "agent"), true);
+  assert.equal(commands.some((command) => command.name === "adapter-smoke-test"), true);
+});
+
 test("session/list returns stored conversations for the requested cwd", async () => {
   const { adapter, sessionStateDir } = createAdapter();
   writeStoredWorkspace(sessionStateDir, "older", {

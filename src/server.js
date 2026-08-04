@@ -31,7 +31,7 @@ export async function main({ input = process.stdin, output = process.stdout } = 
       },
       requestTimeoutMs: config.copilotAcpRequestTimeoutMs,
       sendToClient(message) {
-        connection?.send(message);
+        connection?.send(adapter.enhanceNativeMessage(message));
       },
     });
     nativeBackend.on("stderr", (text) => {

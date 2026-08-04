@@ -259,6 +259,32 @@ export class CopilotAcpAdapter {
     };
   }
 
+  enhanceNativeMessage(message = {}) {
+    const update = message.params?.update;
+    if (
+      message.method !== "session/update" ||
+      update?.sessionUpdate !== "available_commands_update"
+    ) {
+      return message;
+    }
+
+    const session = this.sessions.get(message.params?.sessionId);
+    const projectSkills = discoverProjectSkills(session?.cwd || this.config.cwd).skills;
+    return {
+      ...message,
+      params: {
+        ...message.params,
+        update: {
+          ...update,
+          availableCommands: mergeAvailableCommands(
+            update.availableCommands,
+            listAvailableCommands(projectSkills),
+          ),
+        },
+      },
+    };
+  }
+
   initialize() {
     return {
       protocolVersion: 1,
@@ -1419,6 +1445,23 @@ function mergeConfigOptions(nativeOptions = [], localOptions = []) {
     }
     seen.add(key);
     result.push(option);
+  }
+  return result;
+}
+
+function mergeAvailableCommands(nativeCommands = [], localCommands = []) {
+  const result = [];
+  const seen = new Set();
+  for (const command of [
+    ...(Array.isArray(nativeCommands) ? nativeCommands : []),
+    ...(Array.isArray(localCommands) ? localCommands : []),
+  ]) {
+    const key = String(command?.name || "").replace(/^\/+/, "");
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(command);
   }
   return result;
 }
