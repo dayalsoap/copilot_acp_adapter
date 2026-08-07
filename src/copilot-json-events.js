@@ -1,3 +1,5 @@
+import { activityStatusForTool } from "./activity-status.js";
+
 export function createCopilotJsonEventForwarder({
   sendAgentMessage,
   sendThought,
@@ -20,6 +22,7 @@ class CopilotJsonEventForwarder {
     this.messageBuffers = new Map();
     this.toolInputBuffers = new Map();
     this.tools = new Map();
+    this.reportedActivities = new Set();
     this.lastStatus = "";
   }
 
@@ -90,6 +93,13 @@ class CopilotJsonEventForwarder {
       case "tool.execution_complete":
         this.emitToolComplete(event.data);
         break;
+      case "subagent.started":
+        this.emitToolActivity(
+          event.data?.toolCallId,
+          "task",
+          { agent_type: event.data?.agentName || event.data?.agentDisplayName },
+        );
+        break;
       default:
         break;
     }
@@ -154,6 +164,8 @@ class CopilotJsonEventForwarder {
       rawInput: parsed,
     });
 
+    this.emitToolActivity(data.toolCallId, data.toolName, parsed, tool.title);
+
     if (!tool.started) {
       this.callbacks.sendToolCall({
         toolCallId: data.toolCallId,
@@ -173,6 +185,7 @@ class CopilotJsonEventForwarder {
       kind: toolKind(request.name),
       rawInput,
     });
+    this.emitToolActivity(request.toolCallId, request.name, rawInput, tool.title);
     if (tool.started) {
       return;
     }
@@ -193,6 +206,7 @@ class CopilotJsonEventForwarder {
       kind: toolKind(data.toolName),
       rawInput,
     });
+    this.emitToolActivity(data.toolCallId, data.toolName, rawInput, tool.title);
     if (tool.started) {
       return;
     }
@@ -252,6 +266,16 @@ class CopilotJsonEventForwarder {
     };
     this.tools.set(toolCallId, next);
     return next;
+  }
+
+  emitToolActivity(toolCallId, toolName, rawInput, title = "") {
+    const status = activityStatusForTool(toolName, rawInput, title);
+    const activityId = toolCallId || `${toolName}:${status}`;
+    if (!status || this.reportedActivities.has(activityId)) {
+      return;
+    }
+    this.reportedActivities.add(activityId);
+    this.callbacks.sendThought(`${status}\n`);
   }
 }
 

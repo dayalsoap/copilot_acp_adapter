@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { activityStatusForTool } from "./activity-status.js";
 import { DEFAULT_CHANGELOG_URL, fetchCopilotChangelog, selectChangelog } from "./changelog.js";
 import {
   buildGithubLoginCommand,
@@ -47,6 +48,7 @@ export class CopilotAcpAdapter {
     this.fetchImpl = fetchImpl;
     this.changelogPromise = null;
     this.activeOperations = new Map();
+    this.reportedNativeActivities = new Set();
   }
 
   async handle(method, params = {}) {
@@ -285,6 +287,44 @@ export class CopilotAcpAdapter {
     };
   }
 
+  enhanceNativeMessages(message = {}) {
+    const enhanced = this.enhanceNativeMessage(message);
+    const update = enhanced.params?.update;
+    if (enhanced.method !== "session/update" || update?.sessionUpdate !== "tool_call") {
+      return [enhanced];
+    }
+
+    const status = activityStatusForTool(update.toolName, update.rawInput, update.title);
+    const activityId = `${enhanced.params?.sessionId || ""}:${update.toolCallId || status}`;
+    if (!status || this.reportedNativeActivities.has(activityId)) {
+      return [enhanced];
+    }
+    this.reportedNativeActivities.add(activityId);
+
+    return [
+      {
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: enhanced.params?.sessionId,
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            messageId: randomUUID(),
+            content: {
+              type: "text",
+              text: `${status}\n`,
+            },
+            _meta: {
+              activity: status.startsWith("Enabling") ? "skill" : "subagent",
+              toolCallId: update.toolCallId,
+            },
+          },
+        },
+      },
+      enhanced,
+    ];
+  }
+
   initialize() {
     return {
       protocolVersion: 1,
@@ -434,8 +474,18 @@ export class CopilotAcpAdapter {
     if (params.sessionId) {
       this.cancel({ sessionId: params.sessionId, reason: "Session closed" });
       this.sessions.delete(params.sessionId);
+      this.clearReportedNativeActivities(params.sessionId);
     }
     return {};
+  }
+
+  clearReportedNativeActivities(sessionId) {
+    const prefix = `${sessionId}:`;
+    for (const activityId of this.reportedNativeActivities) {
+      if (activityId.startsWith(prefix)) {
+        this.reportedNativeActivities.delete(activityId);
+      }
+    }
   }
 
   async prompt(params = {}) {

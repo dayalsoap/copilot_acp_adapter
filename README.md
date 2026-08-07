@@ -9,6 +9,12 @@ backend and proxies prompts, permission requests, and Copilot-owned slash
 commands through that backend, while keeping adapter compatibility helpers for
 client discovery and local-only commands.
 
+When Copilot selects a skill from natural language, the adapter emits a visible
+thought update such as `Enabling test-runner skill.` When Copilot delegates work,
+it similarly emits `Delegating to adapter-explorer subagent.` These notices are
+derived from Copilot's structured skill and task tool calls, work with both the
+native ACP backend and prompt fallback, and are emitted once per invocation.
+
 ## Usage
 
 ```sh

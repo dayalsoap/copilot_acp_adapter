@@ -160,6 +160,53 @@ test("native command updates retain adapter commands and project skills", async 
   assert.equal(commands.some((command) => command.name === "adapter-smoke-test"), true);
 });
 
+test("native skill and subagent tool calls announce their activity", () => {
+  const { adapter } = createAdapter();
+  const skillMessages = adapter.enhanceNativeMessages({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "skill-1",
+        title: "Using skill: test-runner",
+        kind: "other",
+        status: "pending",
+        rawInput: { skill: "test-runner" },
+      },
+    },
+  });
+  const subagentMessages = adapter.enhanceNativeMessages({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "task-1",
+        title: "Explore the adapter",
+        kind: "other",
+        status: "pending",
+        rawInput: { agent_type: "adapter-explorer", prompt: "Inspect the adapter" },
+      },
+    },
+  });
+
+  assert.equal(skillMessages.length, 2);
+  assert.equal(skillMessages[0].params.update.sessionUpdate, "agent_thought_chunk");
+  assert.equal(skillMessages[0].params.update.content.text, "Enabling `test-runner` skill.\n");
+  assert.equal(skillMessages[1].params.update.toolCallId, "skill-1");
+  assert.deepEqual(adapter.enhanceNativeMessages(skillMessages[1]), [skillMessages[1]]);
+  assert.equal(subagentMessages.length, 2);
+  assert.equal(subagentMessages[0].params.update.sessionUpdate, "agent_thought_chunk");
+  assert.equal(
+    subagentMessages[0].params.update.content.text,
+    "Delegating to `adapter-explorer` subagent.\n",
+  );
+  assert.equal(subagentMessages[1].params.update.toolCallId, "task-1");
+});
+
 test("session/list returns stored conversations for the requested cwd", async () => {
   const { adapter, sessionStateDir } = createAdapter();
   writeStoredWorkspace(sessionStateDir, "older", {
@@ -384,6 +431,39 @@ test("prompt JSON events are forwarded as agent-shell tool and thought updates",
         {
           type: "assistant.tool_call_delta",
           data: {
+            toolCallId: "skill-1",
+            toolName: "skill",
+            toolType: "function",
+            inputDelta: "{\"skill\":\"test-runner\"}",
+          },
+        },
+        {
+          type: "tool.execution_start",
+          data: {
+            toolCallId: "skill-1",
+            toolName: "skill",
+            arguments: { skill: "test-runner" },
+          },
+        },
+        {
+          type: "assistant.tool_call_delta",
+          data: {
+            toolCallId: "task-1",
+            toolName: "task",
+            toolType: "function",
+            inputDelta: "{\"agent_type\":\"adapter-explorer\",\"prompt\":\"Inspect\"}",
+          },
+        },
+        {
+          type: "subagent.started",
+          data: {
+            toolCallId: "task-1",
+            agentName: "adapter-explorer",
+          },
+        },
+        {
+          type: "assistant.tool_call_delta",
+          data: {
             toolCallId: "call-1",
             toolName: "bash",
             toolType: "function",
@@ -453,6 +533,22 @@ test("prompt JSON events are forwarded as agent-shell tool and thought updates",
     .map((notification) => notification.params.update);
 
   assert.equal(result.stopReason, "end_turn");
+  assert.equal(
+    updates.filter(
+      (update) =>
+        update.sessionUpdate === "agent_thought_chunk" &&
+        update.content.text === "Enabling `test-runner` skill.\n",
+    ).length,
+    1,
+  );
+  assert.equal(
+    updates.filter(
+      (update) =>
+        update.sessionUpdate === "agent_thought_chunk" &&
+        update.content.text === "Delegating to `adapter-explorer` subagent.\n",
+    ).length,
+    1,
+  );
   assert.equal(
     updates.some(
       (update) =>
