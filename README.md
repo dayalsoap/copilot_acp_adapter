@@ -188,19 +188,64 @@ All commands from `AGENTS.md` are advertised to the ACP client:
 - Help: `/help`, `/changelog`, `/feedback`, `/diagnose`, `/theme`, `/statusline`, `/footer`, `/update`, `/version`, `/experimental`, `/memory`, `/clear`, `/instructions`, `/app`
 - Other: `/ask`, `/chronicle`, `/env`, `/exit`, `/keep-alive`, `/limits`, `/login`, `/logout`, `/new`, `/plan`, `/research`, `/restart`, `/search`, `/settings`, `/subagents`, `/user`, `/voice`
 
-Routing defaults to the persistent native `copilot --acp` backend:
+### Command routing
 
-- Native ACP proxy: normal prompts and Copilot-owned slash commands, including
-  permission and agent-environment commands such as `/allow-all`, `/add-dir`,
-  `/list-dirs`, `/cwd`, `/reset-allowed-tools`, `/agent`, `/model`,
-  `/autopilot`, `/skills`, `/mcp`, and `/plugin`.
-- Adapter compatibility helpers: `/help`, `/login`, `/logout`, `/changelog`,
-  `/diff`, `/settings`, `/subagents`, `/theme`, `/experimental`, `/memory`,
-  `/keep-alive`, `/limits`, `/exit`, `/version`, and `/update`. Stateful
-  session commands such as `/new` and `/clear` are proxied to native Copilot.
-- Prompt fallback (`COPILOT_BACKEND=prompt`): adapter-owned routing remains
-  available for older CLI builds or debugging, but it does not provide live
-  native ACP permission requests.
+The default `COPILOT_BACKEND=native-acp` runs a persistent `copilot --acp`
+backend. The adapter intercepts the following commands; all other advertised
+commands and ordinary prompts are sent unchanged to native Copilot ACP.
+
+| Command | Adapter behavior |
+| --- | --- |
+| `/login` | Handles GitHub.com, GitHub Enterprise, and API-key authentication. |
+| `/logout` | Clears adapter-held token environment variables. It does not perform an interactive Copilot CLI OAuth logout. |
+| `/help` | Displays the adapter command help. |
+| `/changelog` | Fetches and displays the Copilot CLI changelog. |
+| `/diff` | Runs local `git diff`. |
+| `/settings` | Manages adapter-supported settings, including per-subagent settings. |
+| `/subagents` | Reads and writes local Copilot subagent configuration. |
+| `/theme` | Reads and writes the local theme preference. |
+| `/experimental` | Reads and writes the local experimental-feature setting. |
+| `/memory` | Reads and writes the local memory setting. |
+| `/keep-alive` | Reads and writes the local keep-alive setting. |
+| `/limits` | Maintains the adapter session's AI-credit limit value. |
+| `/exit` | Closes the adapter ACP session. |
+| `/version` | Runs `copilot --version` directly. |
+| `/update` | Runs `copilot update` directly. |
+
+In native ACP mode, Copilot owns and receives the following advertised commands:
+
+- Agent environment: `/init`, `/agent`, `/skills`, `/mcp`, `/plugin`
+- Agents/subagents: `/model`, `/delegate`, `/fleet`, `/autopilot`, `/tasks`
+- Code: `/ide`, `/pr`, `/review`, `/security-review`, `/rubber-duck`, `/lsp`, `/terminal-setup`
+- Permissions: `/allow-all`, `/add-dir`, `/list-dirs`, `/cwd`, `/reset-allowed-tools`
+- Session: `/resume`, `/rename`, `/context`, `/usage`, `/session`, `/compact`, `/share`, `/remote`, `/copy`, `/rewind`
+- Help/UI: `/feedback`, `/diagnose`, `/statusline`, `/footer`, `/clear`, `/instructions`, `/app`
+- Other: `/ask`, `/chronicle`, `/env`, `/new`, `/plan`, `/research`, `/restart`, `/search`, `/user`, `/voice`
+
+In particular, `/add-dir`, `/allow-all`, `/agent`, `/autopilot`, `/clear`,
+`/cwd`, `/model`, `/new`, and `/skills` are handled by native Copilot in the
+default mode, rather than by the adapter's compatibility code.
+
+#### Prompt fallback routing
+
+`COPILOT_BACKEND=prompt` is an older, non-interactive `copilot -p` fallback. It
+does not provide live native ACP permission requests. In this mode, the adapter
+locally implements `/login`, `/logout`, `/help`, `/changelog`, `/model`,
+`/agent`, `/autopilot`, `/cwd`, `/add-dir`, `/list-dirs`, `/diff`,
+`/allow-all`, `/reset-allowed-tools`, `/resume`, `/rename`, `/session`,
+`/context`, `/usage`, `/theme`, `/experimental`, `/memory`, `/keep-alive`,
+`/limits`, `/new`, `/clear`, `/exit`, `/subagents`, and `/settings`.
+
+The fallback invokes direct CLI subcommands for `/init`, `/mcp`, `/plugin`,
+`/update`, and `/version`. `/skills` or `/skills list` displays locally
+discovered project skills; other `/skills` forms invoke `copilot skill ...`.
+All remaining advertised commands are passed as literal text to `copilot -p`,
+which is not equivalent to native interactive slash-command execution.
+
+Unknown slash commands are forwarded to native Copilot ACP in the default mode.
+In prompt fallback mode, the adapter reports that the command is unknown before
+forwarding it as prompt text. `/agents` is described for compatibility but is
+not an advertised command, so it follows this unknown-command behavior.
 
 `session/new`'s `cwd` parameter is treated as the client-provided working
 directory. In Emacs agent-shell, this is controlled by
@@ -218,9 +263,9 @@ During `session/load`, the adapter also replays user and assistant messages from
 Copilot's `events.jsonl` as ACP history updates so clients can render the stored
 conversation before it continues.
 
-`/subagents` is implemented natively because Copilot exposes it only as an
-interactive UI command. The adapter discovers project-defined agents from
-`.github/agents` under the session cwd first. If none are found there, it falls
+`/subagents` is implemented locally by the adapter because Copilot exposes it
+only as an interactive UI command. The adapter discovers project-defined agents
+from `.github/agents` under the session cwd first. If none are found there, it falls
 back to `.github/agents` at the git root. It then overlays the documented
 per-agent model settings from `COPILOT_SETTINGS_PATH` or
 `$COPILOT_HOME/settings.json`:
@@ -284,7 +329,8 @@ Give me an adapter architecture summary and recommend the best next agent-shell 
 A newly added skill is advertised when an ACP session starts. Restart the
 agent-shell buffer after adding or renaming skills so its completion menu
 receives a fresh command list. Authentication is still required for prompt-mode
-skill execution; `/skills` itself is handled locally by the adapter.
+skill execution. In the default native ACP backend, `/skills` is proxied to
+Copilot; its local discovery behavior applies in prompt fallback mode.
 
 ### Project agent smoke tests
 
