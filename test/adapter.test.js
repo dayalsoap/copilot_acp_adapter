@@ -123,6 +123,22 @@ test("session/new exposes model and mode metadata for agent-shell header", async
   assert.equal(result.modes.availableModes.some((mode) => mode.id === "plan"), true);
 });
 
+test("adopted native sessions retain Copilot's autopilot mode id", async () => {
+  const { adapter } = createAdapter();
+  await adapter.adoptNativeSession({}, {
+    sessionId: "native-session",
+    modes: {
+      currentModeId: "copilot#agent",
+      availableModes: [
+        { id: "copilot#agent", name: "Agent" },
+        { id: "copilot#autopilot", name: "Autopilot" },
+      ],
+    },
+  });
+
+  assert.equal(adapter.nativeModeId("native-session", "autopilot"), "copilot#autopilot");
+});
+
 test("native command updates retain adapter commands and project skills", async () => {
   const { adapter } = createAdapter();
   const repo = mkdtempSync(join(tmpdir(), "copilot-acp-native-commands-"));

@@ -131,7 +131,7 @@ export class NativeAcpBackend extends EventEmitter {
     this.connection.send({ jsonrpc: "2.0", method, params });
   }
 
-  forwardClientMessage(message) {
+  forwardClientMessage(message, transformResponse = null) {
     this.start();
     if (isResponse(message)) {
       return this.forwardClientResponse(message);
@@ -140,7 +140,10 @@ export class NativeAcpBackend extends EventEmitter {
     const forwarded = { ...message };
     if (message.id !== undefined) {
       forwarded.id = `client-${this.nextUpstreamId++}`;
-      this.forwardedClientRequests.set(forwarded.id, message.id);
+      this.forwardedClientRequests.set(forwarded.id, {
+        clientId: message.id,
+        transformResponse,
+      });
     }
     this.connection.send(forwarded);
     return true;
@@ -175,10 +178,15 @@ export class NativeAcpBackend extends EventEmitter {
         return;
       }
 
-      const clientId = this.forwardedClientRequests.get(message.id);
-      if (clientId !== undefined) {
+      const forwardedRequest = this.forwardedClientRequests.get(message.id);
+      if (forwardedRequest !== undefined) {
         this.forwardedClientRequests.delete(message.id);
-        this.sendToClient({ ...message, id: clientId });
+        const response = { ...message, id: forwardedRequest.clientId };
+        this.sendToClient(
+          forwardedRequest.transformResponse
+            ? forwardedRequest.transformResponse(response)
+            : response,
+        );
       }
       return;
     }

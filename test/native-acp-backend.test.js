@@ -70,3 +70,25 @@ test("native ACP backend remaps native requests through the client", () => {
     result: { outcome: { outcome: "selected", optionId: "allow" } },
   });
 });
+
+test("native ACP backend can transform a forwarded response", () => {
+  const { backend, child, clientMessages } = createBackend();
+  let forwarded;
+  child.stdin.on("data", (chunk) => {
+    forwarded = JSON.parse(chunk.toString());
+  });
+
+  backend.forwardClientMessage({
+    jsonrpc: "2.0",
+    id: 9,
+    method: "session/set_mode",
+    params: { sessionId: "s1", modeId: "autopilot" },
+  }, (response) => ({ ...response, result: { stopReason: "end_turn" } }));
+  child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: forwarded.id, result: {} })}\n`);
+
+  assert.deepEqual(clientMessages[0], {
+    jsonrpc: "2.0",
+    id: 9,
+    result: { stopReason: "end_turn" },
+  });
+});

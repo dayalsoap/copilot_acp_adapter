@@ -132,7 +132,50 @@ async function proxyRequest({ adapter, nativeBackend, nativeInitializePromise, c
     return;
   }
 
+  const autopilotModeMessage = nativeAutopilotModeMessage(
+    message,
+    adapter.nativeModeId(message.params?.sessionId, "autopilot"),
+  );
+  if (autopilotModeMessage) {
+    nativeBackend.forwardClientMessage(autopilotModeMessage, (response) => {
+      if (response.error) {
+        return response;
+      }
+      return {
+        ...response,
+        result: {
+          stopReason: "end_turn",
+          _meta: {
+            command: "/autopilot",
+            handledBy: "native-acp-mode",
+          },
+        },
+      };
+    });
+    return;
+  }
+
   nativeBackend.forwardClientMessage(normalizeNativeMessage(message));
+}
+
+export function nativeAutopilotModeMessage(message, modeId = "autopilot") {
+  if (message.method !== "session/prompt" && message.method !== "prompt") {
+    return null;
+  }
+
+  const promptText = nativePromptText(message.params || {});
+  if (promptText === null || promptText.trim() !== "/autopilot") {
+    return null;
+  }
+
+  return {
+    ...message,
+    method: "session/set_mode",
+    params: {
+      sessionId: message.params?.sessionId,
+      modeId,
+    },
+  };
 }
 
 export function normalizeNativeMessage(message) {
@@ -167,6 +210,27 @@ export function normalizeNativeMessage(message) {
       prompt: [{ type: "text", text: promptText }],
     },
   };
+}
+
+function nativePromptText(params) {
+  if (typeof params.prompt === "string") {
+    return params.prompt;
+  }
+  if (typeof params.text === "string") {
+    return params.text;
+  }
+  if (typeof params.content === "string") {
+    return params.content;
+  }
+  if (
+    Array.isArray(params.prompt) &&
+    params.prompt.length === 1 &&
+    params.prompt[0]?.type === "text" &&
+    typeof params.prompt[0].text === "string"
+  ) {
+    return params.prompt[0].text;
+  }
+  return null;
 }
 
 function shouldProxyToNative(adapter, message) {

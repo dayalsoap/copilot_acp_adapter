@@ -144,7 +144,11 @@ the installed CLI's `copilot help config` model choices. If both discovery paths
 fail or time out, the adapter only advertises `auto` plus the current configured
 model.
 The session mode defaults to `Agent` and can be changed from the `agent-shell`
-mode menu when available.
+mode menu when available. Selecting `Autopilot` with
+`M-x agent-shell-set-session-mode` uses Copilot's native ACP mode-change flow,
+which asks for the autopilot permission level. Entering a bare `/autopilot`
+command uses that same flow, so it presents the same permission choices instead
+of bypassing the picker or requiring a separate `/allow-all` command.
 
 By default, `agent-shell` starts sessions at the project root. To start Copilot
 in the current Emacs `default-directory` instead, for example after `M-x cd` into
@@ -200,6 +204,7 @@ commands and ordinary prompts are sent unchanged to native Copilot ACP.
 | `/logout` | Clears adapter-held token environment variables. It does not perform an interactive Copilot CLI OAuth logout. |
 | `/help` | Displays the adapter command help. |
 | `/changelog` | Fetches and displays the Copilot CLI changelog. |
+| `/autopilot` | Sends a native ACP `session/set_mode` request, including Copilot's autopilot permission-level picker. |
 | `/diff` | Runs local `git diff`. |
 | `/settings` | Manages adapter-supported settings, including per-subagent settings. |
 | `/subagents` | Reads and writes local Copilot subagent configuration. |
@@ -215,16 +220,19 @@ commands and ordinary prompts are sent unchanged to native Copilot ACP.
 In native ACP mode, Copilot owns and receives the following advertised commands:
 
 - Agent environment: `/init`, `/agent`, `/skills`, `/mcp`, `/plugin`
-- Agents/subagents: `/model`, `/delegate`, `/fleet`, `/autopilot`, `/tasks`
+- Agents/subagents: `/model`, `/delegate`, `/fleet`, `/tasks`
 - Code: `/ide`, `/pr`, `/review`, `/security-review`, `/rubber-duck`, `/lsp`, `/terminal-setup`
 - Permissions: `/allow-all`, `/add-dir`, `/list-dirs`, `/cwd`, `/reset-allowed-tools`
 - Session: `/resume`, `/rename`, `/context`, `/usage`, `/session`, `/compact`, `/share`, `/remote`, `/copy`, `/rewind`
 - Help/UI: `/feedback`, `/diagnose`, `/statusline`, `/footer`, `/clear`, `/instructions`, `/app`
 - Other: `/ask`, `/chronicle`, `/env`, `/new`, `/plan`, `/research`, `/restart`, `/search`, `/user`, `/voice`
 
-In particular, `/add-dir`, `/allow-all`, `/agent`, `/autopilot`, `/clear`,
-`/cwd`, `/model`, `/new`, and `/skills` are handled by native Copilot in the
-default mode, rather than by the adapter's compatibility code.
+In particular, `/add-dir`, `/allow-all`, `/agent`, `/clear`, `/cwd`, `/model`,
+`/new`, and `/skills` are handled by native Copilot in the default mode, rather
+than by the adapter's compatibility code. The adapter translates bare
+`/autopilot` into Copilot's native mode-change request so it behaves exactly
+like choosing `Autopilot` from the ACP client mode menu. Forms with arguments
+continue to pass through as native slash commands.
 
 #### Prompt fallback routing
 
