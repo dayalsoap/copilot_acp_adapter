@@ -148,7 +148,10 @@ mode menu when available. Selecting `Autopilot` with
 `M-x agent-shell-set-session-mode` uses Copilot's native ACP mode-change flow,
 which asks for the autopilot permission level. Entering a bare `/autopilot`
 command uses that same flow, so it presents the same permission choices instead
-of bypassing the picker or requiring a separate `/allow-all` command.
+of bypassing the picker or requiring a separate `/allow-all` command. Current
+`agent-shell` versions express mode-menu changes as `session/set_config_option`;
+the adapter translates those requests to Copilot's native `session/set_mode`
+method so the picker is retained.
 
 By default, `agent-shell` starts sessions at the project root. To start Copilot
 in the current Emacs `default-directory` instead, for example after `M-x cd` into

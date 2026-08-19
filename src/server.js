@@ -132,6 +132,16 @@ async function proxyRequest({ adapter, nativeBackend, nativeInitializePromise, c
     return;
   }
 
+  const configModeId = adapter.nativeModeIdFromConfigOption(
+    message.params?.sessionId,
+    message.params?.configId || message.params?.id,
+    message.params?.value,
+  );
+  if (configModeId !== null) {
+    nativeBackend.forwardClientMessage(nativeConfigModeMessage(message, configModeId));
+    return;
+  }
+
   const autopilotModeMessage = nativeAutopilotModeMessage(
     message,
     adapter.nativeModeId(message.params?.sessionId, "autopilot"),
@@ -156,6 +166,17 @@ async function proxyRequest({ adapter, nativeBackend, nativeInitializePromise, c
   }
 
   nativeBackend.forwardClientMessage(normalizeNativeMessage(message));
+}
+
+export function nativeConfigModeMessage(message, modeId) {
+  return {
+    ...message,
+    method: "session/set_mode",
+    params: {
+      sessionId: message.params?.sessionId,
+      modeId,
+    },
+  };
 }
 
 export function nativeAutopilotModeMessage(message, modeId = "autopilot") {

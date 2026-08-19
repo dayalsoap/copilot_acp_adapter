@@ -137,6 +137,27 @@ test("adopted native sessions retain Copilot's autopilot mode id", async () => {
   });
 
   assert.equal(adapter.nativeModeId("native-session", "autopilot"), "copilot#autopilot");
+  assert.equal(
+    adapter.nativeModeIdFromConfigOption("native-session", "mode", "autopilot"),
+    "copilot#autopilot",
+  );
+});
+
+test("adopted native sessions recognize native mode config option ids", async () => {
+  const { adapter } = createAdapter();
+  await adapter.adoptNativeSession({}, {
+    sessionId: "native-session",
+    configOptions: [{ id: "copilot-mode", category: "mode", currentValue: "agent" }],
+  });
+
+  assert.equal(
+    adapter.nativeModeIdFromConfigOption("native-session", "copilot-mode", "plan"),
+    "plan",
+  );
+  assert.equal(
+    adapter.nativeModeIdFromConfigOption("native-session", "model", "gpt-5.4"),
+    null,
+  );
 });
 
 test("native command updates retain adapter commands and project skills", async () => {

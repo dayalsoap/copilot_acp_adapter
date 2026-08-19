@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { nativeAutopilotModeMessage, normalizeNativeMessage } from "../src/server.js";
+import {
+  nativeAutopilotModeMessage,
+  nativeConfigModeMessage,
+  normalizeNativeMessage,
+} from "../src/server.js";
 
 test("native prompt proxy normalizes string shorthand to ACP content blocks", () => {
   assert.deepEqual(
@@ -39,6 +43,30 @@ test("bare /autopilot uses the native ACP mode-change method", () => {
     {
       jsonrpc: "2.0",
       id: 2,
+      method: "session/set_mode",
+      params: {
+        sessionId: "s1",
+        modeId: "copilot#autopilot",
+      },
+    },
+  );
+});
+
+test("agent-shell mode config requests use the native ACP mode-change method", () => {
+  assert.deepEqual(
+    nativeConfigModeMessage({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "session/set_config_option",
+      params: {
+        sessionId: "s1",
+        configId: "mode",
+        value: "autopilot",
+      },
+    }, "copilot#autopilot"),
+    {
+      jsonrpc: "2.0",
+      id: 3,
       method: "session/set_mode",
       params: {
         sessionId: "s1",

@@ -236,6 +236,7 @@ export class CopilotAcpAdapter {
         "agent",
       ),
       nativeModeIds: nativeModeIds(nativeResult.modes),
+      nativeModeConfigIds: nativeModeConfigIds(nativeResult.configOptions),
       copilotSessionId: sessionId,
       resumeExisting: false,
       name: params.name || "",
@@ -396,6 +397,7 @@ export class CopilotAcpAdapter {
       modelId: this.config.copilotModel || "auto",
       modeId: normalizeModeId(this.config.copilotMode || "agent"),
       nativeModeIds: {},
+      nativeModeConfigIds: ["mode"],
       copilotSessionId: params.copilotSessionId || sessionId,
       resumeExisting: false,
       name: params.name || "",
@@ -449,6 +451,7 @@ export class CopilotAcpAdapter {
       modelId: this.config.copilotModel || "auto",
       modeId: normalizeModeId(this.config.copilotMode || "agent"),
       nativeModeIds: {},
+      nativeModeConfigIds: ["mode"],
       copilotSessionId: sessionId,
       resumeExisting: true,
       name: stored?.title || params.name || "",
@@ -1228,6 +1231,14 @@ export class CopilotAcpAdapter {
     return this.sessions.get(sessionId)?.nativeModeIds?.[normalized] || modeId;
   }
 
+  nativeModeIdFromConfigOption(sessionId, configId, value) {
+    const session = this.sessions.get(sessionId);
+    if (!session?.nativeModeConfigIds?.includes(configId)) {
+      return null;
+    }
+    return this.nativeModeId(sessionId, configOptionValue(value));
+  }
+
   applySessionModel(session, modelId) {
     session.modelId = modelId || session.modelId || "auto";
     this.notify("session/update", {
@@ -1878,6 +1889,16 @@ function nativeModeIds(modes = {}) {
       .filter((mode) => mode?.id)
       .map((mode) => [normalizeModeId(mode.id), mode.id]),
   );
+}
+
+function nativeModeConfigIds(configOptions = []) {
+  return [
+    "mode",
+    ...(configOptions || [])
+      .filter((option) => option?.category === "mode")
+      .map((option) => option.id)
+      .filter(Boolean),
+  ];
 }
 
 function configOptionValue(value) {
