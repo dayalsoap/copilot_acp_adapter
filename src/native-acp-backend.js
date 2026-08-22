@@ -93,13 +93,23 @@ export class NativeAcpBackend extends EventEmitter {
   }
 
   attachChild(stdin, stdout) {
+    const child = this.child;
     this.connection = new JsonRpcConnection(stdout, stdin);
     this.connection.framing = "newline";
     this.connection.on("message", (message) => this.handleBackendMessage(message));
     this.connection.start();
-    this.child.stderr?.on("data", (chunk) => this.emit("stderr", chunk.toString()));
-    this.child.on("error", (error) => this.rejectAll(error));
-    this.child.on("close", (code, signal) => {
+    child.stderr?.on("data", (chunk) => this.emit("stderr", chunk.toString()));
+    child.on("error", (error) => {
+      if (this.child !== child) {
+        return;
+      }
+      this.rejectAll(error);
+    });
+    child.on("close", (code, signal) => {
+      // A restart has already replaced this child; its teardown is not our business.
+      if (this.child !== child) {
+        return;
+      }
       const error = new Error(`Native Copilot ACP exited with code ${code}${signal ? ` signal ${signal}` : ""}`);
       setImmediate(() => this.rejectAll(error));
       this.child = null;
@@ -209,6 +219,47 @@ export class NativeAcpBackend extends EventEmitter {
       pending.reject(error);
       this.pendingBackendRequests.delete(id);
     }
+
+    // Requests the client is still waiting on. Without this the client hangs
+    // forever on a turn the backend will never answer.
+    for (const [backendId, forwarded] of this.forwardedClientRequests) {
+      this.forwardedClientRequests.delete(backendId);
+      const response = {
+        jsonrpc: "2.0",
+        id: forwarded.clientId,
+        error: {
+          code: -32000,
+          message: error.message || "Native Copilot ACP backend terminated",
+        },
+      };
+      try {
+        this.sendToClient(
+          forwarded.transformResponse ? forwarded.transformResponse(response) : response,
+        );
+      } catch {
+        // A failing client transport must not stop the remaining rejections.
+      }
+    }
+
+    // Responses the backend was waiting on can never be delivered now.
+    this.forwardedClientResponses.clear();
+  }
+
+  async restart(env = {}) {
+    this.env = { ...this.env, ...env };
+    const child = this.child;
+    if (!child) {
+      return;
+    }
+
+    const closed = new Promise((resolve) => child.once("close", resolve));
+    this.close();
+    await Promise.race([closed, delay(2000)]);
+
+    if (this.child === child) {
+      this.child = null;
+      this.connection = null;
+    }
   }
 
   close() {
@@ -230,4 +281,11 @@ export class NativeAcpBackend extends EventEmitter {
 
 function isResponse(message) {
   return message && message.id !== undefined && !message.method;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
 }

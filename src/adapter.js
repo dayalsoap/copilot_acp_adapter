@@ -29,6 +29,8 @@ import {
 } from "./settings.js";
 import { listStoredSessions, readStoredSession, readStoredTranscript, readStoredUsage } from "./session-store.js";
 
+const MAX_REPORTED_ACTIVITIES = 2000;
+
 const DIRECT_COPILOT_COMMANDS = Object.freeze({
   "/init": { args: ["init"] },
   "/skills": { args: ["skill"], defaultArgs: ["list"] },
@@ -39,10 +41,17 @@ const DIRECT_COPILOT_COMMANDS = Object.freeze({
 });
 
 export class CopilotAcpAdapter {
-  constructor({ config, runner, notify = () => {}, fetchImpl = globalThis.fetch }) {
+  constructor({
+    config,
+    runner,
+    notify = () => {},
+    fetchImpl = globalThis.fetch,
+    restartBackend = null,
+  }) {
     this.config = config;
     this.runner = runner;
     this.notify = notify;
+    this.restartBackend = restartBackend;
     this.sessions = new Map();
     this.globalEnv = {};
     this.fetchImpl = fetchImpl;
@@ -246,7 +255,7 @@ export class CopilotAcpAdapter {
       createdAt: new Date().toISOString(),
     };
     this.sessions.set(sessionId, session);
-    this.sendAvailableCommands(sessionId);
+    this.scheduleAvailableCommands(sessionId);
     return this.enhanceSessionStartResult(session, nativeResult);
   }
 
@@ -302,6 +311,12 @@ export class CopilotAcpAdapter {
       return [enhanced];
     }
     this.reportedNativeActivities.add(activityId);
+    // One entry per tool call, and sessions are long-lived. Evict oldest-first.
+    while (this.reportedNativeActivities.size > MAX_REPORTED_ACTIVITIES) {
+      this.reportedNativeActivities.delete(
+        this.reportedNativeActivities.values().next().value,
+      );
+    }
 
     return [
       {
@@ -407,7 +422,7 @@ export class CopilotAcpAdapter {
       createdAt: new Date().toISOString(),
     };
     this.sessions.set(sessionId, session);
-    this.sendAvailableCommands(sessionId);
+    this.scheduleAvailableCommands(sessionId);
     return this.sessionStartResult(session);
   }
 
@@ -472,7 +487,7 @@ export class CopilotAcpAdapter {
         { replay: true },
       );
     }
-    this.sendAvailableCommands(sessionId);
+    this.scheduleAvailableCommands(sessionId);
     return this.sessionStartResult(session);
   }
 
@@ -495,7 +510,10 @@ export class CopilotAcpAdapter {
   }
 
   async prompt(params = {}) {
-    const sessionId = this.ensureSession(params);
+    // `??` short-circuits, so a session we already hold reaches startOperation with
+    // no await in between. Otherwise a session/cancel racing this prompt could run
+    // before the operation was registered and cancel nothing.
+    const sessionId = this.knownSessionId(params) ?? (await this.ensureSession(params));
     const session = this.sessions.get(sessionId);
     const operation = this.startOperation(sessionId);
 
@@ -595,16 +613,22 @@ export class CopilotAcpAdapter {
     };
   }
 
-  ensureSession(params = {}) {
-    if (params.sessionId && this.sessions.has(params.sessionId)) {
-      return params.sessionId;
+  knownSessionId(params = {}) {
+    return params.sessionId && this.sessions.has(params.sessionId) ? params.sessionId : null;
+  }
+
+  async ensureSession(params = {}) {
+    const known = this.knownSessionId(params);
+    if (known) {
+      return known;
     }
 
-    return this.newSession({
+    const created = await this.newSession({
       sessionId: params.sessionId,
       cwd: params.cwd,
       additionalDirectories: params.additionalDirectories,
-    }).sessionId;
+    });
+    return created.sessionId;
   }
 
   async handleSlashCommand(session, slashCommand, prompt, projectSkill = null, signal) {
@@ -614,14 +638,22 @@ export class CopilotAcpAdapter {
 
     if (slashCommand.name === "/logout") {
       this.clearAdapterAuth();
+      const restart = await this.applyAuthChange();
       this.sendText(
         session?.id,
         [
           "Adapter-held token authentication has been cleared.",
+          ...restart.notes,
+          ...(restart.error
+            ? [`Could not restart the Copilot ACP backend: ${restart.error}`]
+            : []),
           "Copilot CLI OAuth logout is an interactive CLI command; use `copilot` and `/logout` directly if you need to revoke a browser/device-flow login.",
         ].join("\n"),
       );
-      return this.commandDone(slashCommand, { handledBy: "adapter" });
+      return this.commandDone(slashCommand, {
+        handledBy: "adapter",
+        restartedBackend: restart.restarted,
+      });
     }
 
     if (slashCommand.name === "/help") {
@@ -1301,6 +1333,13 @@ export class CopilotAcpAdapter {
 
     if (plan.type === "api-key") {
       this.globalEnv = { ...this.globalEnv, ...plan.env };
+      const restart = await this.applyAuthChange();
+      if (restart.error) {
+        throw Object.assign(
+          new Error(`Could not restart the Copilot ACP backend: ${restart.error}`),
+          { code: -32001 },
+        );
+      }
       return {};
     }
 
@@ -1332,15 +1371,29 @@ export class CopilotAcpAdapter {
     }
 
     if (plan.type === "api-key") {
+      // globalEnv is what the native backend is relaunched with, so it always
+      // has to carry the token, not just the session that ran /login.
+      this.globalEnv = { ...this.globalEnv, ...plan.env };
       if (session) {
         session.env = { ...(session.env || {}), ...plan.env };
-      } else {
-        this.globalEnv = { ...this.globalEnv, ...plan.env };
       }
-      this.sendText(session?.id, plan.message);
+
+      const restart = await this.applyAuthChange();
+      if (restart.error) {
+        this.sendText(
+          session?.id,
+          `${plan.message}\nCould not restart the Copilot ACP backend: ${restart.error}`,
+        );
+        return {
+          stopReason: "error",
+          _meta: { auth: "api-key", error: restart.error },
+        };
+      }
+
+      this.sendText(session?.id, [plan.message, ...restart.notes].join("\n"));
       return {
         stopReason: "end_turn",
-        _meta: { auth: "api-key" },
+        _meta: { auth: "api-key", restartedBackend: restart.restarted },
       };
     }
 
@@ -1383,6 +1436,7 @@ export class CopilotAcpAdapter {
 
   async logout() {
     this.clearAdapterAuth();
+    await this.applyAuthChange();
     return {};
   }
 
@@ -1391,6 +1445,47 @@ export class CopilotAcpAdapter {
     for (const session of this.sessions.values()) {
       session.env = {};
     }
+  }
+
+  /**
+   * Relaunch the native backend so a credential change actually reaches it.
+   * A running process cannot have its environment rewritten.
+   */
+  async applyAuthChange() {
+    if (!this.restartBackend) {
+      return { restarted: false, notes: [], error: "" };
+    }
+
+    try {
+      const restarted = await this.restartBackend();
+      if (!restarted) {
+        return { restarted: false, notes: [], error: "" };
+      }
+      return {
+        restarted: true,
+        notes: [
+          "Restarted the Copilot ACP backend so it picks up the new credentials.",
+          "Copilot-side sessions did not survive the restart — run `/new` or start a new agent-shell before your next prompt.",
+        ],
+        error: "",
+      };
+    } catch (error) {
+      return { restarted: false, notes: [], error: error.message };
+    }
+  }
+
+  /**
+   * Emitted after the session/new result reaches the client. setImmediate rather
+   * than queueMicrotask: the result is written from a microtask continuation, and
+   * a client that receives available_commands_update for a session it has not
+   * registered yet will discard it.
+   */
+  scheduleAvailableCommands(sessionId) {
+    setImmediate(() => {
+      if (this.sessions.has(sessionId)) {
+        this.sendAvailableCommands(sessionId);
+      }
+    });
   }
 
   sendAvailableCommands(sessionId) {
@@ -1453,7 +1548,14 @@ export class CopilotAcpAdapter {
   }
 
   sendText(sessionId, text, sessionUpdate = "agent_message_chunk", meta = {}) {
-    if (!sessionId || !text) {
+    if (!text) {
+      return;
+    }
+    if (!sessionId) {
+      // Dropping output silently is how the un-awaited ensureSession bug stayed hidden.
+      process.stderr.write(
+        `copilot-acp-adapter: dropped a ${sessionUpdate} with no sessionId\n`,
+      );
       return;
     }
     this.notify("session/update", {

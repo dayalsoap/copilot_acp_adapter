@@ -92,3 +92,56 @@ test("native ACP backend can transform a forwarded response", () => {
     result: { stopReason: "end_turn" },
   });
 });
+
+test("a backend crash answers the client requests it left in flight", async () => {
+  const { backend, child, clientMessages } = createBackend();
+  child.stdin.on("data", () => {});
+
+  backend.forwardClientMessage({
+    jsonrpc: "2.0",
+    id: 7,
+    method: "session/prompt",
+    params: { sessionId: "s1" },
+  });
+  assert.equal(backend.forwardedClientRequests.size, 1);
+
+  child.emit("close", 1, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const response = clientMessages.find((message) => message.id === 7);
+  assert.ok(response, "the client must not be left waiting on a dead backend");
+  assert.equal(response.error.code, -32000);
+  assert.match(response.error.message, /exited with code 1/);
+  assert.equal(backend.forwardedClientRequests.size, 0);
+  assert.equal(backend.forwardedClientResponses.size, 0);
+});
+
+test("restart relaunches the backend with updated environment", async () => {
+  const spawned = [];
+  const backend = new NativeAcpBackend({
+    command: "copilot",
+    transport: "stdio",
+    env: {},
+    sendToClient() {},
+    requestTimeoutMs: 500,
+    spawnImpl(command, args, options) {
+      const child = new EventEmitter();
+      child.stdin = new PassThrough();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = () => child.emit("close", null, "SIGTERM");
+      spawned.push(options.env.COPILOT_GITHUB_TOKEN ?? "");
+      child.stdin.on("data", (chunk) => {
+        const message = JSON.parse(chunk.toString());
+        child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} })}\n`);
+      });
+      return child;
+    },
+  });
+
+  await backend.request("initialize", {});
+  await backend.restart({ COPILOT_GITHUB_TOKEN: "ghp_token" });
+  await backend.request("initialize", {});
+
+  assert.deepEqual(spawned, ["", "ghp_token"]);
+});

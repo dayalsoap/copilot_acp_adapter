@@ -26,11 +26,34 @@ export function parseLoginArgs(rawArgs, config) {
     };
   }
 
-  return {
-    mode: "github",
-    host: mode === "github" ? parts[1] || config.githubHost : mode,
-    token: findFlagValue(parts, "--api-key") || findFlagValue(parts, "--token"),
-  };
+  if (mode === "github") {
+    return {
+      mode: "github",
+      host: parts[1] || config.githubHost,
+      token: findFlagValue(parts, "--api-key") || findFlagValue(parts, "--token"),
+    };
+  }
+
+  // `/login github.com` and `/login ghe.example.com` are shorthand for a host.
+  if (looksLikeHost(mode)) {
+    return {
+      mode: "github",
+      host: mode,
+      token: findFlagValue(parts, "--api-key") || findFlagValue(parts, "--token"),
+    };
+  }
+
+  // Anything else is a typo. Treating it as a hostname silently ran
+  // `copilot login --host https://gihub`.
+  return { mode: "invalid", host: "", token: "", requested: mode };
+}
+
+export function looksLikeHost(value) {
+  const text = String(value || "").trim();
+  if (/^https?:\/\//i.test(text)) {
+    return true;
+  }
+  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(text);
 }
 
 export function loginFromMethodId(methodId, config) {
@@ -69,6 +92,22 @@ export function listAuthMethods(config) {
 }
 
 export function buildGithubLoginCommand(login, config) {
+  if (login.mode === "invalid") {
+    return {
+      type: "invalid",
+      ok: false,
+      message: [
+        `Unrecognised login target \`${login.requested}\`.`,
+        "",
+        "- `/login github` for GitHub.com",
+        "- `/login enterprise <hostname>` for GitHub Enterprise",
+        "- `/login api-key <token>` for headless token auth",
+        "",
+        "A bare hostname such as `/login ghe.example.com` also works.",
+      ].join("\n"),
+    };
+  }
+
   if (login.mode === "choose") {
     return {
       type: "choose",
@@ -138,13 +177,6 @@ function normalizeLoginHost(host) {
     return "";
   }
   return /^https?:\/\//.test(host) ? host : `https://${host}`;
-}
-
-export function buildLogoutCommand(config) {
-  return {
-    command: "",
-    args: [],
-  };
 }
 
 function findFlagValue(parts, flag) {

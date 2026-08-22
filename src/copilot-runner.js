@@ -147,14 +147,17 @@ export function runProcess({
       signal?.addEventListener?.("abort", onAbort, { once: true });
     }
 
-    child.stdout.on("data", (chunk) => {
-      const text = chunk.toString();
+    // StringDecoder semantics: a multi-byte character split across two chunks is
+    // held back rather than emitted as replacement characters.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+
+    child.stdout.on("data", (text) => {
       stdout += text;
       onStdout?.(text);
     });
 
-    child.stderr.on("data", (chunk) => {
-      const text = chunk.toString();
+    child.stderr.on("data", (text) => {
       stderr += text;
       onStderr?.(text);
     });

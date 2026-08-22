@@ -8,17 +8,52 @@ export async function main({ input = process.stdin, output = process.stdout } = 
   const config = loadConfig();
   let connection;
   let nativeBackend;
+  let nativeInitializePromise;
+
+  // Environment cannot be injected into a running process, so credential changes
+  // have to relaunch `copilot --acp` and re-run the ACP handshake.
+  const restartNativeBackend = async () => {
+    if (!nativeBackend) {
+      return false;
+    }
+    await nativeBackend.restart({ ...adapter.globalEnv });
+    await startNativeInitialize();
+    return true;
+  };
+
+  const startNativeInitialize = () => {
+    nativeInitializePromise = nativeBackend.request("initialize", {
+      protocolVersion: 1,
+      clientInfo: {
+        name: "copilot-acp-adapter",
+        version: "0.1.0",
+      },
+    });
+    nativeInitializePromise.then(
+      () => nativeBackend.notify("initialized", {}),
+      () => {},
+    );
+    return nativeInitializePromise;
+  };
+
   const adapter = new CopilotAcpAdapter({
     config,
     runner: new CopilotRunner(config),
+    restartBackend: restartNativeBackend,
     notify(method, params) {
       connection?.send({ jsonrpc: "2.0", method, params });
     },
   });
   connection = new JsonRpcConnection(input, output);
+  connection.on("parseError", (error) => {
+    connection.send({
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32700, message: error.message },
+    });
+  });
   const inFlight = new Set();
   const keepAlive = setInterval(() => {}, 2 ** 31 - 1);
-  let nativeInitializePromise;
   if (config.copilotBackend === "native-acp") {
     nativeBackend = new NativeAcpBackend({
       command: config.copilotCommand,
@@ -41,24 +76,15 @@ export async function main({ input = process.stdin, output = process.stdout } = 
         process.stderr.write(text);
       }
     });
-    nativeInitializePromise = nativeBackend.request("initialize", {
-      protocolVersion: 1,
-      clientInfo: {
-        name: "copilot-acp-adapter",
-        version: "0.1.0",
-      },
-    });
-    nativeInitializePromise.then(
-      () => nativeBackend.notify("initialized", {}),
-      () => {},
-    );
+    startNativeInitialize();
   }
 
   connection.on("message", (message) => {
     const task = handleMessage({
       adapter,
       nativeBackend,
-      nativeInitializePromise,
+      // Read lazily: a credential change relaunches the backend and replaces this.
+      getNativeInitialize: () => nativeInitializePromise,
       connection,
       message,
     }).finally(() => inFlight.delete(task));
@@ -74,7 +100,7 @@ export async function main({ input = process.stdin, output = process.stdout } = 
   nativeBackend?.close();
 }
 
-async function handleMessage({ adapter, nativeBackend, nativeInitializePromise, connection, message }) {
+async function handleMessage({ adapter, nativeBackend, getNativeInitialize, connection, message }) {
   if (message?.method === "initialized") {
     return;
   }
@@ -88,12 +114,11 @@ async function handleMessage({ adapter, nativeBackend, nativeInitializePromise, 
 
   try {
     if (nativeBackend && shouldProxyToNative(adapter, message)) {
-      await proxyRequest({ adapter, nativeBackend, nativeInitializePromise, connection, message });
+      await proxyRequest({ adapter, nativeBackend, getNativeInitialize, connection, message });
       return;
     }
 
     const result = await adapter.handle(message.method, message.params || {});
-    refreshNativeEnv(nativeBackend, adapter);
     sendResult(connection, message, result);
   } catch (error) {
     if (message.id !== undefined) {
@@ -109,9 +134,9 @@ async function handleMessage({ adapter, nativeBackend, nativeInitializePromise, 
   }
 }
 
-async function proxyRequest({ adapter, nativeBackend, nativeInitializePromise, connection, message }) {
+async function proxyRequest({ adapter, nativeBackend, getNativeInitialize, connection, message }) {
   if (message.method === "initialize") {
-    const result = adapter.enhanceInitialize(await nativeInitializePromise);
+    const result = adapter.enhanceInitialize(await getNativeInitialize());
     sendResult(connection, message, result);
     return;
   }
@@ -132,11 +157,15 @@ async function proxyRequest({ adapter, nativeBackend, nativeInitializePromise, c
     return;
   }
 
-  const configModeId = adapter.nativeModeIdFromConfigOption(
-    message.params?.sessionId,
-    message.params?.configId || message.params?.id,
-    message.params?.value,
-  );
+  // Gate on the method: keying off a bare `params.id` rewrote unrelated requests
+  // into session/set_mode.
+  const configModeId = isSetConfigOption(message.method)
+    ? adapter.nativeModeIdFromConfigOption(
+        message.params?.sessionId,
+        message.params?.configId || message.params?.id,
+        message.params?.value,
+      )
+    : null;
   if (configModeId !== null) {
     nativeBackend.forwardClientMessage(nativeConfigModeMessage(message, configModeId));
     return;
@@ -166,6 +195,10 @@ async function proxyRequest({ adapter, nativeBackend, nativeInitializePromise, c
   }
 
   nativeBackend.forwardClientMessage(normalizeNativeMessage(message));
+}
+
+export function isSetConfigOption(method) {
+  return method === "session/set_config_option" || method === "setConfigOption";
 }
 
 export function nativeConfigModeMessage(message, modeId) {
@@ -255,9 +288,6 @@ function nativePromptText(params) {
 }
 
 function shouldProxyToNative(adapter, message) {
-  if (isResponse(message)) {
-    return true;
-  }
   if (message.method === "initialize" || message.method === "session/new" || message.method === "newSession") {
     return true;
   }
@@ -273,20 +303,6 @@ function sendResult(connection, message, result) {
   }
 }
 
-function refreshNativeEnv(nativeBackend, adapter) {
-  if (!nativeBackend || nativeBackend.child) {
-    return;
-  }
-  nativeBackend.env = {
-    ...nativeBackend.env,
-    ...adapter.globalEnv,
-  };
-}
-
 function isRequest(message) {
   return message && message.jsonrpc === "2.0" && typeof message.method === "string";
-}
-
-function isResponse(message) {
-  return message && message.id !== undefined && typeof message.method !== "string";
 }

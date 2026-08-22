@@ -174,7 +174,13 @@ function readAgentMetadata(filePath) {
 function parseLooseMetadata(text) {
   const metadata = {};
   const frontmatter = String(text).match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
-  const source = frontmatter?.[1] || text.split(/\r?\n/).slice(0, 30).join("\n");
+  if (!frontmatter) {
+    // Without frontmatter there is no metadata to trust; scanning the body read
+    // ordinary prose lines as `name:` / `description:`. The filename fallback
+    // still supplies a name.
+    return metadata;
+  }
+  const source = frontmatter[1];
 
   for (const line of source.split(/\r?\n/)) {
     const match = line.match(/^\s*(name|id|description|title)\s*:\s*(.+?)\s*$/i);

@@ -5,6 +5,12 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { CopilotAcpAdapter } from "../src/adapter.js";
 
+// available_commands_update is deliberately deferred until after the session/new
+// result has been written, so tests that look for it have to yield first.
+function flushSessionUpdates() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function createAdapter(options = {}) {
   const settingsDir = mkdtempSync(join(tmpdir(), "copilot-acp-settings-"));
   const sessionStateDir = mkdtempSync(join(tmpdir(), "copilot-acp-session-state-"));
@@ -49,6 +55,7 @@ function createAdapter(options = {}) {
     },
     runner: activeRunner,
     fetchImpl: options.fetchImpl,
+    restartBackend: options.restartBackend,
     notify(method, params) {
       notifications.push({ method, params });
     },
@@ -658,6 +665,7 @@ test("session config option model changes affect subsequent Copilot args", async
 test("direct Copilot commands use CLI subcommands instead of prompt mode", async () => {
   const { adapter, runner, notifications } = createAdapter();
   const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+  await flushSessionUpdates();
   const result = await adapter.handle("session/prompt", {
     sessionId,
     prompt: "/mcp",
@@ -729,6 +737,7 @@ test("project skills are advertised and forwarded without an unknown-command war
   );
 
   const { sessionId } = await adapter.handle("session/new", { cwd: repo });
+  await flushSessionUpdates();
   const availableCommands = notifications.find(
     (notification) =>
       notification.method === "session/update" &&
@@ -1074,4 +1083,97 @@ test("bare login shows choices instead of assuming GitHub.com", async () => {
     ),
     true,
   );
+});
+
+test("a prompt for an unknown session still delivers its output", async () => {
+  const { adapter, notifications } = createAdapter();
+
+  const result = await adapter.handle("session/prompt", {
+    sessionId: "session-from-a-previous-adapter-run",
+    prompt: "/help",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  const chunks = notifications.filter(
+    (entry) => entry.params?.update?.sessionUpdate === "agent_message_chunk",
+  );
+  assert.equal(chunks.length, 1, "the first turn must not silently drop its output");
+  assert.equal(chunks[0].params.sessionId, "session-from-a-previous-adapter-run");
+  assert.match(chunks[0].params.update.content.text, /Copilot ACP adapter commands/);
+});
+
+test("ensureSession resolves to the session id it created", async () => {
+  const { adapter } = createAdapter();
+
+  const sessionId = await adapter.ensureSession({ sessionId: "brand-new" });
+
+  assert.equal(sessionId, "brand-new");
+  assert.equal(adapter.sessions.has("brand-new"), true);
+});
+
+test("/login api-key restarts the native backend with the new credentials", async () => {
+  let restarts = 0;
+  const { adapter, notifications } = createAdapter({
+    restartBackend: async () => {
+      restarts += 1;
+      return true;
+    },
+  });
+  const { sessionId } = await adapter.handle("session/new", {});
+
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/login api-key ghp_example",
+  });
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.equal(result._meta.restartedBackend, true);
+  assert.equal(restarts, 1);
+  assert.equal(adapter.globalEnv.COPILOT_GITHUB_TOKEN, "ghp_example");
+  const text = notifications
+    .filter((entry) => entry.params?.update?.content?.text)
+    .map((entry) => entry.params.update.content.text)
+    .join("\n");
+  assert.match(text, /Restarted the Copilot ACP backend/);
+});
+
+test("/login api-key reports a failed backend restart instead of claiming success", async () => {
+  const { adapter } = createAdapter({
+    restartBackend: async () => {
+      throw new Error("mkfifo failed");
+    },
+  });
+  const { sessionId } = await adapter.handle("session/new", {});
+
+  const result = await adapter.handle("session/prompt", {
+    sessionId,
+    prompt: "/login api-key ghp_example",
+  });
+
+  assert.equal(result.stopReason, "error");
+  assert.match(result._meta.error, /mkfifo failed/);
+});
+
+test("/login rejects a typo instead of treating it as a hostname", async () => {
+  const { adapter, runner } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", {});
+
+  const result = await adapter.handle("session/prompt", { sessionId, prompt: "/login gihub" });
+
+  assert.equal(result.stopReason, "error");
+  assert.equal(
+    runner.calls.some((call) => call.type === "command" && call.args?.[0] === "login"),
+    false,
+    "a typo must not launch a login against https://gihub",
+  );
+});
+
+test("/login accepts a bare hostname", async () => {
+  const { adapter, runner } = createAdapter();
+  const { sessionId } = await adapter.handle("session/new", {});
+
+  await adapter.handle("session/prompt", { sessionId, prompt: "/login ghe.example.com" });
+
+  const login = runner.calls.find((call) => call.type === "command" && call.args?.[0] === "login");
+  assert.deepEqual(login.args, ["login", "--host", "https://ghe.example.com"]);
 });
