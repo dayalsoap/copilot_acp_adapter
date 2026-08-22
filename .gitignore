@@ -3,3 +3,7 @@ coverage/
 .env
 .DS_Store
 npm-debug.log*
+
+# agent-shell session artifacts. Transcripts record whatever was typed at the
+# prompt, and `/login api-key <token>` arrives as a prompt.
+.agent-shell/
