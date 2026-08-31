@@ -132,7 +132,6 @@ export class CopilotAcpAdapter {
           "/subagents",
           "/theme",
           "/experimental",
-          "/memory",
           "/keep-alive",
           "/limits",
           "/exit",

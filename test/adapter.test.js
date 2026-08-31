@@ -446,6 +446,17 @@ test("native backend mode proxies Copilot-owned slash commands", () => {
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/add-dir ../logs" }), false);
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/allow-all" }), false);
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/autopilot" }), false);
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/memory" }), false);
+  for (const command of [
+    "/permissions",
+    "/blame main.js",
+    "/every 5m check status",
+    "/after 10m run tests",
+    "/sandbox show",
+    "/subconscious status",
+  ]) {
+    assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: command }), false, command);
+  }
   assert.equal(adapter.shouldHandleLocally("session/prompt", {
     prompt: [{ type: "text", text: "/new" }],
   }), false);
@@ -453,13 +464,14 @@ test("native backend mode proxies Copilot-owned slash commands", () => {
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/settings" }), true);
 });
 
-test("prompt fallback keeps new and clear local", () => {
+test("prompt fallback keeps new, clear, and memory local", () => {
   const { adapter } = createAdapter({
     config: { copilotBackend: "prompt" },
   });
 
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/new" }), true);
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/clear" }), true);
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/memory" }), true);
 });
 
 test("prompt JSON events are forwarded as agent-shell tool and thought updates", async () => {
