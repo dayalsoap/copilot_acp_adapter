@@ -96,6 +96,9 @@ export async function main({ input = process.stdin, output = process.stdout } = 
     connection.start();
   });
   await Promise.allSettled(inFlight);
+  // Flush transforms already registered when EOF arrived. New client requests
+  // cannot arrive after EOF, but a transform created later is not included.
+  await nativeBackend?.waitForDeliveries();
   clearInterval(keepAlive);
   nativeBackend?.close();
 }
@@ -194,7 +197,17 @@ async function proxyRequest({ adapter, nativeBackend, getNativeInitialize, conne
     return;
   }
 
-  nativeBackend.forwardClientMessage(normalizeNativeMessage(message));
+  const nativeMessage = normalizeNativeMessage(message);
+  nativeBackend.forwardClientMessage(nativeMessage, (response) => enhanceNativePromptResponse(adapter, nativeMessage, response));
+}
+
+// Exported for an offline server-hook regression test. This is called only for
+// the completed prompt response, never for streamed session/update messages.
+export async function enhanceNativePromptResponse(adapter, nativeMessage, response) {
+  if (!response.error && (nativeMessage.method === "session/prompt" || nativeMessage.method === "prompt")) {
+    await adapter.reportNativeSubagentDispatch(nativeMessage.params?.sessionId);
+  }
+  return response;
 }
 
 export function isSetConfigOption(method) {

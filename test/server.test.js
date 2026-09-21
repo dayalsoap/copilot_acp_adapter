@@ -1,10 +1,21 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  enhanceNativePromptResponse,
   nativeAutopilotModeMessage,
   nativeConfigModeMessage,
   normalizeNativeMessage,
 } from "../src/server.js";
+
+test("completed prompt response invokes the native subagent journal hook once", async () => {
+  const calls = []; const adapter = { async reportNativeSubagentDispatch(sessionId) { calls.push(sessionId); } };
+  const response = { jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } };
+  assert.deepEqual(await enhanceNativePromptResponse(adapter, { method: "session/prompt", params: { sessionId: "s1" } }, response), response);
+  assert.deepEqual(calls, ["s1"]);
+  await enhanceNativePromptResponse(adapter, { method: "session/prompt", params: { sessionId: "s2" } }, { ...response, error: { code: -1 } });
+  await enhanceNativePromptResponse(adapter, { method: "session/update", params: { sessionId: "s3" } }, response);
+  assert.deepEqual(calls, ["s1"]);
+});
 
 test("native prompt proxy normalizes string shorthand to ACP content blocks", () => {
   assert.deepEqual(

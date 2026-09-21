@@ -34,6 +34,7 @@ export class NativeAcpBackend extends EventEmitter {
     this.pendingBackendRequests = new Map();
     this.forwardedClientRequests = new Map();
     this.forwardedClientResponses = new Map();
+    this.pendingDeliveries = new Set();
   }
 
   start() {
@@ -96,7 +97,21 @@ export class NativeAcpBackend extends EventEmitter {
     const child = this.child;
     this.connection = new JsonRpcConnection(stdout, stdin);
     this.connection.framing = "newline";
-    this.connection.on("message", (message) => this.handleBackendMessage(message));
+    this.connection.on("message", (message) => {
+      try {
+        const result = this.handleBackendMessage(message);
+        if (result?.catch) result.catch((error) => this.emit("backendError", error));
+      } catch (error) {
+        // `error` is special on EventEmitter and throws when unobserved.
+        this.emit("backendError", error);
+      }
+    });
+    this.connection.on("parseError", (error) => this.rejectAll(error));
+    // Streams can fail independently of the ChildProcess (notably ENOENT and
+    // broken FIFO/stdin). Reject waiting callers immediately rather than only
+    // after their request timeout.
+    stdin.on?.("error", (error) => this.rejectAll(error));
+    stdout.on?.("error", (error) => this.rejectAll(error));
     this.connection.start();
     child.stderr?.on("data", (chunk) => this.emit("stderr", chunk.toString()));
     child.on("error", (error) => {
@@ -132,7 +147,13 @@ export class NativeAcpBackend extends EventEmitter {
           }, timeoutMs)
         : null;
       this.pendingBackendRequests.set(id, { resolve, reject, timeout });
-      this.connection.send(message);
+      try {
+        this.connection.send(message);
+      } catch (error) {
+        this.pendingBackendRequests.delete(id);
+        if (timeout) clearTimeout(timeout);
+        reject(error);
+      }
     });
   }
 
@@ -192,11 +213,7 @@ export class NativeAcpBackend extends EventEmitter {
       if (forwardedRequest !== undefined) {
         this.forwardedClientRequests.delete(message.id);
         const response = { ...message, id: forwardedRequest.clientId };
-        this.sendToClient(
-          forwardedRequest.transformResponse
-            ? forwardedRequest.transformResponse(response)
-            : response,
-        );
+        return this.deliverForwardedResponse(forwardedRequest, response);
       }
       return;
     }
@@ -209,6 +226,39 @@ export class NativeAcpBackend extends EventEmitter {
     }
 
     this.sendToClient(message);
+  }
+
+  deliverForwardedResponse(forwarded, response) {
+    let transformed;
+    try {
+      transformed = forwarded.transformResponse ? forwarded.transformResponse(response) : response;
+    } catch (error) {
+      this.emit("backendError", error);
+      this.sendToClient(response);
+      return Promise.resolve();
+    }
+    if (!transformed?.then) {
+      this.sendToClient(transformed);
+      return Promise.resolve();
+    }
+    const delivery = Promise.resolve(transformed)
+      // Handle only transform rejection here. A client transport failure must
+      // not cause a second send of the same native response.
+      .then(
+        (value) => this.sendToClient(value),
+        (error) => {
+          this.emit("backendError", error);
+          return this.sendToClient(response);
+        },
+      )
+      .catch((error) => this.emit("backendError", error))
+      .finally(() => this.pendingDeliveries.delete(delivery));
+    this.pendingDeliveries.add(delivery);
+    return delivery;
+  }
+
+  async waitForDeliveries() {
+    await Promise.allSettled([...this.pendingDeliveries]);
   }
 
   rejectAll(error) {
@@ -233,9 +283,7 @@ export class NativeAcpBackend extends EventEmitter {
         },
       };
       try {
-        this.sendToClient(
-          forwarded.transformResponse ? forwarded.transformResponse(response) : response,
-        );
+        this.deliverForwardedResponse(forwarded, response);
       } catch {
         // A failing client transport must not stop the remaining rejections.
       }

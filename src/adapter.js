@@ -28,8 +28,10 @@ import {
   writeSettings,
 } from "./settings.js";
 import { listStoredSessions, readStoredSession, readStoredTranscript, readStoredUsage } from "./session-store.js";
+import { completionEvidence, readSubagentCompletions } from "./subagent-reports.js";
 
 const MAX_REPORTED_ACTIVITIES = 2000;
+const MAX_TRACKED_SUBAGENTS = 500;
 
 const DIRECT_COPILOT_COMMANDS = Object.freeze({
   "/init": { args: ["init"] },
@@ -58,6 +60,9 @@ export class CopilotAcpAdapter {
     this.changelogPromise = null;
     this.activeOperations = new Map();
     this.reportedNativeActivities = new Set();
+    // Native ACP tells us what was requested in rawInput, while the session
+    // journal is the only observed source for firstDispatchedModel.
+    this.nativeSubagentStarts = new Map();
   }
 
   async handle(method, params = {}) {
@@ -305,10 +310,12 @@ export class CopilotAcpAdapter {
     }
 
     const status = activityStatusForTool(update.toolName, update.rawInput, update.title);
-    const activityId = `${enhanced.params?.sessionId || ""}:${update.toolCallId || status}`;
+    const sessionId = enhanced.params?.sessionId || "";
+    const activityId = `${sessionId}:${update.toolCallId || status}`;
     if (!status || this.reportedNativeActivities.has(activityId)) {
       return [enhanced];
     }
+    this.trackNativeSubagentStart(sessionId, update);
     this.reportedNativeActivities.add(activityId);
     // One entry per tool call, and sessions are long-lived. Evict oldest-first.
     while (this.reportedNativeActivities.size > MAX_REPORTED_ACTIVITIES) {
@@ -328,17 +335,94 @@ export class CopilotAcpAdapter {
             messageId: randomUUID(),
             content: {
               type: "text",
-              text: `${status}\n`,
+              text: nativeActivityText(status, update.rawInput),
             },
             _meta: {
               activity: status.startsWith("Enabling") ? "skill" : "subagent",
               toolCallId: update.toolCallId,
+              ...(subagentStartMetadata(update.rawInput) || {}),
             },
           },
         },
       },
       enhanced,
     ];
+  }
+
+  trackNativeSubagentStart(sessionId, update = {}) {
+    const metadata = subagentStartMetadata(update.rawInput);
+    if (!sessionId || !update.toolCallId || !metadata) return;
+    const starts = this.nativeSubagentStarts.get(sessionId) || new Map();
+    starts.set(update.toolCallId, { ...metadata, toolCallId: update.toolCallId });
+    while (starts.size > MAX_TRACKED_SUBAGENTS) starts.delete(starts.keys().next().value);
+    this.nativeSubagentStarts.set(sessionId, starts);
+    // Bound aggregate tracking too: sessions may be numerous and long-lived.
+    while (totalTrackedSubagents(this.nativeSubagentStarts) > MAX_TRACKED_SUBAGENTS) {
+      const oldestSessionId = this.nativeSubagentStarts.keys().next().value;
+      const oldestStarts = this.nativeSubagentStarts.get(oldestSessionId);
+      oldestStarts.delete(oldestStarts.keys().next().value);
+      if (!oldestStarts.size) this.nativeSubagentStarts.delete(oldestSessionId);
+    }
+  }
+
+  async reportNativeSubagentDispatch(sessionId) {
+    const currentStarts = this.nativeSubagentStarts.get(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!currentStarts?.size || !session?.copilotSessionId) return [];
+    // Drain this turn's snapshot before awaiting; starts from a later turn must
+    // remain tracked rather than being cleared by delayed reporting.
+    const starts = new Map(currentStarts);
+    this.nativeSubagentStarts.delete(sessionId);
+
+    // The CLI can append several completion records after the ACP response.
+    // Retry until every currently tracked start is present, never merely until
+    // the first completion is found.
+    let completions = new Map();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      completions = readSubagentCompletions({
+        sessionStatePath: this.config.copilotSessionStatePath,
+        sessionId: session.copilotSessionId,
+        toolCallIds: [...starts.keys()],
+      });
+      if (completions.size === starts.size || attempt === 2) break;
+      await delay(50);
+    }
+
+    const reports = [];
+    for (const [toolCallId, start] of starts) {
+      const evidence = completionEvidence(completions.get(toolCallId));
+      const dispatched = evidence?.firstDispatchedModel || "unknown";
+      const mismatch = Boolean(evidence?.firstDispatchedModel && start.requestedModel && dispatched !== start.requestedModel);
+      const text = [
+        evidence
+          ? `Subagent \`${start.agentName}\` model report.`
+          : `Subagent \`${start.agentName}\` model report (completion unverified).`,
+        `Requested model: \`${start.requestedModel || "unknown"}\`.`,
+        `Recorded first dispatched model: \`${dispatched}\`.`,
+        ...(mismatch ? ["Warning: requested and recorded dispatched models differ; this can be Copilot alias/routing, not an adapter error."] : []),
+        ...(!evidence ? ["Completion evidence was unavailable (missing, delayed, unreadable, or outside the bounded journal tail)."] : []),
+      ].join(" ");
+      this.notify("session/update", {
+        sessionId,
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          messageId: randomUUID(),
+          content: { type: "text", text: `${text}\n` },
+          _meta: {
+            activity: "subagent-dispatch-report",
+            toolCallId,
+            agentName: start.agentName,
+            requestedModel: start.requestedModel || "unknown",
+            firstDispatchedModel: dispatched,
+            explicitModelOverride: evidence?.explicitModelOverride ?? null,
+            evidence: evidence ? "subagent.completed" : "unavailable",
+            mismatch,
+          },
+        },
+      });
+      reports.push({ toolCallId, requestedModel: start.requestedModel, firstDispatchedModel: dispatched, mismatch });
+    }
+    return reports;
   }
 
   initialize() {
@@ -495,6 +579,7 @@ export class CopilotAcpAdapter {
       this.cancel({ sessionId: params.sessionId, reason: "Session closed" });
       this.sessions.delete(params.sessionId);
       this.clearReportedNativeActivities(params.sessionId);
+      this.nativeSubagentStarts.delete(params.sessionId);
     }
     return {};
   }
@@ -1572,6 +1657,26 @@ export class CopilotAcpAdapter {
   }
 }
 
+function subagentStartMetadata(rawInput) {
+  const input = rawInput && typeof rawInput === "object" ? rawInput : {};
+  const agentName = input.agent_type || input.agentType || input.agent_name || input.agentName;
+  if (typeof agentName !== "string" || !agentName.trim()) return null;
+  // This is a request only. It is intentionally never used as dispatch proof.
+  const requestedModel = typeof input.model === "string" ? input.model.trim() : "";
+  return { agentName: agentName.trim(), requestedModel };
+}
+
+function nativeActivityText(status, rawInput) {
+  const metadata = subagentStartMetadata(rawInput);
+  return metadata?.requestedModel
+    ? `${status} Requested model: \`${metadata.requestedModel}\`.\n`
+    : `${status}\n`;
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 function extractPromptText(params) {
   if (Array.isArray(params.prompt)) {
     return params.prompt
@@ -2093,4 +2198,10 @@ function stripOption(args, option) {
 
 function stripFlag(args, option) {
   return args.filter((arg) => arg !== option && !arg.startsWith(`${option}=`));
+}
+
+function totalTrackedSubagents(startsBySession) {
+  let total = 0;
+  for (const starts of startsBySession.values()) total += starts.size;
+  return total;
 }

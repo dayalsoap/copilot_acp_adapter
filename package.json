@@ -8,6 +8,7 @@
   },
   "scripts": {
     "test": "node --test",
+    "test:live": "COPILOT_LIVE_TEST=1 node --test test/live-subagent.test.js",
     "start": "node ./bin/copilot-acp-adapter.js"
   },
   "engines": {

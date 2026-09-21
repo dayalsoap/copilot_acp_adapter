@@ -12,8 +12,9 @@ client discovery and local-only commands.
 When Copilot selects a skill from natural language, the adapter emits a visible
 thought update such as `Enabling test-runner skill.` When Copilot delegates work,
 it similarly emits `Delegating to adapter-explorer subagent.` These notices are
-derived from Copilot's structured skill and task tool calls, work with both the
-native ACP backend and prompt fallback, and are emitted once per invocation.
+derived from Copilot's structured skill and task tool calls in the native ACP
+backend and are emitted once per invocation. Prompt fallback is not enhanced
+with native subagent journal/model-dispatch reporting.
 
 ## Usage
 
@@ -382,6 +383,78 @@ The adapter auto-detects util-linux and BSD/macOS `script` syntax, and falls
 back to plain subprocess execution if `script` fails with terminal/ioctl errors.
 You can override detection with `COPILOT_SCRIPT_STYLE=util-linux`,
 `COPILOT_SCRIPT_STYLE=bsd`, or `COPILOT_SCRIPT_STYLE=none`.
+
+## Subagent dispatch reporting
+
+In native ACP mode, a delegation `tool_call` produces a thought update that
+shows the **requested model** from the tool's `rawInput`. At the end of that
+prompt, the adapter makes a bounded (256 KiB tail) best-effort read of the
+specific configured `COPILOT_SESSION_STATE_PATH/<session-id>/events.jsonl` file. For only
+the tool-call IDs observed in that current adapter session, it reports the
+correlated `subagent.completed` event's `firstDispatchedModel`, plus structured
+thought `_meta` fields: `requestedModel`, `firstDispatchedModel`,
+`explicitModelOverride`, `toolCallId`, and `mismatch`.
+
+`firstDispatchedModel` is the CLI's recorded first dispatched model, not a list
+of every model used by a subagent and not independently verified serving-model
+telemetry. A requested/recorded mismatch may be Copilot aliasing or routing and
+does not by itself indicate an adapter bug. The adapter never treats
+`rawInput.model`, `subagent.configured`, or assistant-message `data.model` as
+dispatch proof. Missing, unreadable, malformed, delayed, or out-of-tail journal
+evidence is reported as `unknown`; it does not fail or alter the original ACP
+prompt, messages, routing, or permissions. Reads happen only after a completed
+prompt response (with two short retries), never per streaming token; there are
+no watchers. A report is emitted once per observed tool call, so late evidence
+will not create a contradictory history entry.
+
+### Opt-in live verification
+
+The normal offline suite never launches Copilot. The live assertion is skipped
+unless explicitly enabled:
+
+```sh
+COPILOT_LIVE_TEST=1 npm run test:live
+
+# Optionally run the same fixture/scenario directly against native Copilot too.
+COPILOT_LIVE_TEST=1 COPILOT_LIVE_COMPARE_NATIVE=1 npm run test:live
+```
+
+It requires an already authenticated CLI and sends a real request, which can
+consume quota. It creates and removes an isolated temporary fixture containing
+a tiny `npm test` and a no-edit `test-diagnostician` agent. It does **not** use
+`--allow-all`, log in, change settings, print transcripts or credentials, or
+grant broad permission requests; an unexpected approval request fails clearly.
+The primary path launches `bin/copilot-acp-adapter.js` with Node, forces
+`COPILOT_BACKEND=native-acp`, creates the session with `{cwd,mcpServers:[]}`,
+and explicitly calls `session/set_model` for the parent model. With
+`COPILOT_LIVE_COMPARE_NATIVE=1`, the direct native path uses the same scenario
+and strict verifier through FIFO transport (not nested piped stdio). Each path
+prints concise JSON with its mode, session ID, requested parent/subagent,
+recorded first dispatch and override, including mismatches; both paths run even
+if the first fails. A native-only result is still useful diagnostic reporting.
+The strict verifier requires an observed delegated tool call and a correlated
+`subagent.completed` record with exact agent/requested/first-dispatched/
+explicit-override model strings, rather than assistant prose. Consequently an
+unknown or missing journal record is a strict live-test failure, while normal
+adapter runtime reporting remains best-effort and labels such evidence
+`unknown`. It reads only the generated session ID from the configured real
+session-state directory; it does not override `COPILOT_HOME` or alter user
+settings.
+Configure the parent and delegated expected model IDs (defaults are Terra and
+Luna) and timeout with:
+
+```sh
+COPILOT_LIVE_PARENT_MODEL=gpt-5.6-terra \
+COPILOT_LIVE_SUBAGENT_MODEL=gpt-5.6-luna \
+COPILOT_LIVE_TIMEOUT_MS=120000 \
+COPILOT_LIVE_TEST=1 npm run test:live
+```
+
+CLI versions, account policy, aliases, routing, permissions, or delayed journal
+writes can make this intentionally strict integration test fail. The child
+forces `COPILOT_LIVE_TEST=0` so a delegated `npm test` cannot recursively start
+another live request. The test closes native transport and removes its fixture
+on success or failure.
 
 ## License
 
