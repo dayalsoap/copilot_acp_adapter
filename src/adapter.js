@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { activityStatusForTool } from "./activity-status.js";
 import { DEFAULT_CHANGELOG_URL, fetchCopilotChangelog, selectChangelog } from "./changelog.js";
 import {
@@ -29,9 +29,17 @@ import {
 } from "./settings.js";
 import { listStoredSessions, readStoredSession, readStoredTranscript, readStoredUsage } from "./session-store.js";
 import { completionEvidence, readSubagentCompletions } from "./subagent-reports.js";
+import { mentionedModels, modelReportOutput, readModelJournal, recordModelEvent, recordModelTool, snapshotModelJournal } from "./model-reports.js";
 
 const MAX_REPORTED_ACTIVITIES = 2000;
 const MAX_TRACKED_SUBAGENTS = 500;
+
+// Only helpers implemented by this adapter belong beside native commands.
+const NATIVE_HELPER_COMMANDS = new Set([
+  "/login", "/logout", "/help", "/changelog", "/diff", "/settings",
+  "/subagents", "/theme", "/experimental", "/keep-alive", "/exit",
+  "/version", "/update",
+]);
 
 const DIRECT_COPILOT_COMMANDS = Object.freeze({
   "/init": { args: ["init"] },
@@ -63,6 +71,8 @@ export class CopilotAcpAdapter {
     // Native ACP tells us what was requested in rawInput, while the session
     // journal is the only observed source for firstDispatchedModel.
     this.nativeSubagentStarts = new Map();
+    this.nativeCommands = new Map();
+    this.modelReportTurns = new Map();
   }
 
   async handle(method, params = {}) {
@@ -76,11 +86,15 @@ export class CopilotAcpAdapter {
       case "agent/commands":
       case "commands/list":
       case "_commands/list":
+        if (this.config.copilotBackend === "native-acp") {
+          return { commands: this.availableNativeCommands(params.sessionId) };
+        }
         return { commands: listCommands() };
       case "newSession":
       case "session/new":
         return this.newSession(params);
       case "session/close":
+      case "closeSession":
         return this.closeSession(params);
       case "session/list":
         return this.listSessions(params);
@@ -106,6 +120,7 @@ export class CopilotAcpAdapter {
   shouldHandleLocally(method, params = {}) {
     switch (method) {
       case "authenticate":
+        return ["github.com", "github-enterprise", "api-key"].includes(params.methodId);
       case "logout":
       case "agent/commands":
       case "commands/list":
@@ -126,28 +141,11 @@ export class CopilotAcpAdapter {
     }
 
     if (this.config.copilotBackend === "native-acp") {
-      if (
-        [
-          "/login",
-          "/logout",
-          "/help",
-          "/changelog",
-          "/diff",
-          "/settings",
-          "/subagents",
-          "/theme",
-          "/experimental",
-          "/keep-alive",
-          "/limits",
-          "/exit",
-          "/version",
-          "/update",
-        ].includes(slashCommand.name)
-      ) {
-        return true;
-      }
-
-      return false;
+      if (NATIVE_HELPER_COMMANDS.has(slashCommand.name)) return true;
+      // ACP treats unsupported slash commands as model prompts. Once native
+      // discovery has arrived, reject those instead of pretending to run them.
+      const commands = this.nativeCommands.get(params.sessionId);
+      return Boolean(commands && !commands.some((command) => `/${command.name}` === slashCommand.name));
     }
 
     if (
@@ -208,14 +206,10 @@ export class CopilotAcpAdapter {
           ...(nativeResult.agentCapabilities?.auth || {}),
           ...(local.agentCapabilities?.auth || {}),
         },
-        sessionCapabilities: {
-          ...(nativeResult.agentCapabilities?.sessionCapabilities || {}),
-          ...(local.agentCapabilities?.sessionCapabilities || {}),
-        },
         _meta: {
           ...(nativeResult.agentCapabilities?._meta || {}),
-          ...(local.agentCapabilities?._meta || {}),
           backend: "native-acp-proxy",
+          commandDiscovery: "available_commands_update",
         },
       },
       agentInfo: {
@@ -230,7 +224,7 @@ export class CopilotAcpAdapter {
     };
   }
 
-  async adoptNativeSession(params = {}, nativeResult = {}) {
+  async adoptNativeSession(params = {}, nativeResult = {}, { loaded = false } = {}) {
     const sessionId = nativeResult.sessionId || params.sessionId || randomUUID();
     const session = {
       id: sessionId,
@@ -248,10 +242,11 @@ export class CopilotAcpAdapter {
         this.config.copilotMode ||
         "agent",
       ),
-      nativeModeIds: nativeModeIds(nativeResult.modes),
+      nativeModeIds: { ...nativeModeIds(nativeResult.modes), ...modeIdsFromConfigOptions(nativeResult.configOptions) },
       nativeModeConfigIds: nativeModeConfigIds(nativeResult.configOptions),
+      nativeConfigOptions: nativeResult.configOptions,
       copilotSessionId: sessionId,
-      resumeExisting: false,
+      resumeExisting: loaded,
       name: params.name || "",
       allowAll: false,
       agentName: "",
@@ -264,47 +259,66 @@ export class CopilotAcpAdapter {
   }
 
   async enhanceSessionStartResult(session, nativeResult = {}) {
-    const fallbackModels = await sessionModels(session, this.config);
-    const models = nativeResult.models?.availableModels?.length ? nativeResult.models : fallbackModels;
+    const models = nativeResult.models || modelsFromConfigOptions(nativeResult.configOptions) ||
+      await sessionModels(session, this.config);
     return {
       ...nativeResult,
       sessionId: session.id,
       cwd: nativeResult.cwd || session.cwd,
       models,
-      modes: nativeResult.modes || sessionModes(session),
-      configOptions: mergeConfigOptions(nativeResult.configOptions, sessionConfigOptions(session, models)),
+      modes: nativeResult.modes || modesFromConfigOptions(nativeResult.configOptions) || sessionModes(session),
+      configOptions: nativeResult.configOptions ?? sessionConfigOptions(session, models),
     };
   }
 
   enhanceNativeMessage(message = {}) {
     const update = message.params?.update;
-    if (
-      message.method !== "session/update" ||
-      update?.sessionUpdate !== "available_commands_update"
-    ) {
-      return message;
+    if (message.method !== "session/update") return message;
+    const sessionId = message.params?.sessionId;
+    const session = this.sessions.get(sessionId);
+    if (session && update?.sessionUpdate === "config_option_update") {
+      session.nativeConfigOptions = update.configOptions;
+      session.nativeModeConfigIds = nativeModeConfigIds(update.configOptions);
+      session.modelId = configOptionCurrentValue(update.configOptions, "model") || session.modelId;
+      session.modeId = normalizeModeId(configOptionCurrentValue(update.configOptions, "mode") || session.modeId);
+      session.nativeModeIds = { ...session.nativeModeIds, ...modeIdsFromConfigOptions(update.configOptions) };
     }
-
-    const session = this.sessions.get(message.params?.sessionId);
-    const projectSkills = discoverProjectSkills(session?.cwd || this.config.cwd).skills;
+    if (session && update?.sessionUpdate === "current_mode_update") {
+      session.modeId = normalizeModeId(update.currentModeId);
+    }
+    if (session && update?.sessionUpdate === "current_model_update") {
+      session.modelId = update.currentModelId || session.modelId;
+    }
+    if (update?.sessionUpdate !== "available_commands_update") return message;
+    this.nativeCommands.set(sessionId, update.availableCommands || []);
+    while (this.nativeCommands.size > MAX_TRACKED_SUBAGENTS) {
+      this.nativeCommands.delete(this.nativeCommands.keys().next().value);
+    }
     return {
       ...message,
       params: {
         ...message.params,
         update: {
           ...update,
-          availableCommands: mergeAvailableCommands(
-            update.availableCommands,
-            listAvailableCommands(projectSkills),
-          ),
+          availableCommands: this.availableNativeCommands(sessionId),
         },
       },
     };
   }
 
+  availableNativeCommands(sessionId) {
+    const helpers = listAvailableCommands().filter((command) => NATIVE_HELPER_COMMANDS.has(`/${command.name}`));
+    return mergeAvailableCommands(helpers, this.nativeCommands.get(sessionId));
+  }
+
   enhanceNativeMessages(message = {}) {
     const enhanced = this.enhanceNativeMessage(message);
     const update = enhanced.params?.update;
+    if (enhanced.method === "session/update" && ["tool_call", "tool_call_update"].includes(update?.sessionUpdate)) {
+      for (const report of this.modelReportTurns.get(enhanced.params?.sessionId) || []) {
+        recordModelTool(report, update);
+      }
+    }
     if (enhanced.method !== "session/update" || update?.sessionUpdate !== "tool_call") {
       return [enhanced];
     }
@@ -347,6 +361,47 @@ export class CopilotAcpAdapter {
       },
       enhanced,
     ];
+  }
+
+  beginModelReport(sessionId, prompt) {
+    const session = this.sessions.get(sessionId);
+    const models = modelsFromConfigOptions(session?.nativeConfigOptions)?.availableModels.map((model) => model.modelId) || this.config.copilotModels || [];
+    const mentioned = mentionedModels(prompt, models);
+    const report = {
+      sessionId, session, mentionedModels: mentioned,
+      requestedSessionModel: session?.modelId || "unknown",
+      sessionAgent: configOptionCurrentValue(session?.nativeConfigOptions, "agent") || session?.agentName || "default Copilot agent",
+      cursor: mentioned.length ? snapshotModelJournal(this.config.copilotSessionStatePath, session?.copilotSessionId) : null,
+      recordedModels: new Set(), modelEvidence: new Set(), skills: new Set(), delegations: new Map(), completions: new Map(),
+      overlap: false, finished: false,
+    };
+    const turns = this.modelReportTurns.get(sessionId) || new Set();
+    if (turns.size) {
+      report.overlap = true;
+      for (const active of turns) active.overlap = true;
+    }
+    turns.add(report);
+    this.modelReportTurns.set(sessionId, turns);
+    return report;
+  }
+
+  async finishModelReport(report, response = {}) {
+    if (!report || report.finished) return;
+    report.finished = true;
+    const turns = this.modelReportTurns.get(report.sessionId);
+    turns?.delete(report);
+    if (!turns?.size) this.modelReportTurns.delete(report.sessionId);
+    if (!report.mentionedModels.length || !report.session || this.sessions.get(report.sessionId) !== report.session) return;
+    if (!report.overlap) {
+      // Reads are bounded and restricted to bytes appended since this prompt.
+      // Streamed JSONL dispatch evidence in prompt fallback takes precedence
+      // simply by joining the set; configuration and prose are never evidence.
+      for (const event of readModelJournal(this.config.copilotSessionStatePath, report.session.copilotSessionId, report.cursor)) {
+        recordModelEvent(report, event);
+      }
+    }
+    const output = modelReportOutput(report, response);
+    this.sendText(report.sessionId, output.text, "agent_message_chunk", output.meta);
   }
 
   trackNativeSubagentStart(sessionId, update = {}) {
@@ -580,6 +635,8 @@ export class CopilotAcpAdapter {
       this.sessions.delete(params.sessionId);
       this.clearReportedNativeActivities(params.sessionId);
       this.nativeSubagentStarts.delete(params.sessionId);
+      this.nativeCommands.delete(params.sessionId);
+      this.modelReportTurns.delete(params.sessionId);
     }
     return {};
   }
@@ -624,14 +681,26 @@ export class CopilotAcpAdapter {
       const forwardedPrompt = projectSkill
         ? buildProjectSkillPrompt(projectSkill, slashCommand.rawArgs)
         : prompt;
-      const eventForwarder = this.createJsonEventForwarder(sessionId);
-      const result = await this.runner.runPrompt(forwardedPrompt, {
-        cwd: session?.cwd || this.config.cwd,
-        env: { ...this.globalEnv, ...(session?.env || {}) },
-        copilotArgs: buildPromptArgs(this.config.copilotArgs || [], session),
-        signal: operation.signal,
-        onStdout: (text) => eventForwarder.write(text),
+      const modelReport = this.beginModelReport(sessionId, prompt);
+      const eventForwarder = this.createJsonEventForwarder(sessionId, (event) => {
+        recordModelEvent(modelReport, event);
+        if (event.type === "tool.execution_start") recordModelTool(modelReport, {
+          toolCallId: event.data?.toolCallId, toolName: event.data?.toolName, rawInput: event.data?.arguments,
+        });
       });
+      let result;
+      try {
+        result = await this.runner.runPrompt(forwardedPrompt, {
+          cwd: session?.cwd || this.config.cwd,
+          env: { ...this.globalEnv, ...(session?.env || {}) },
+          copilotArgs: buildPromptArgs(this.config.copilotArgs || [], session),
+          signal: operation.signal,
+          onStdout: (text) => eventForwarder.write(text),
+        });
+      } catch (error) {
+        await this.finishModelReport(modelReport, { error });
+        throw error;
+      }
       eventForwarder.end();
 
       if (eventForwarder.sawJson) {
@@ -641,6 +710,7 @@ export class CopilotAcpAdapter {
       } else {
         this.sendOutput(sessionId, result);
       }
+      await this.finishModelReport(modelReport, { result: { stopReason: result.aborted ? "cancelled" : result.ok ? "end_turn" : "error" } });
 
       return {
         stopReason: result.aborted ? "cancelled" : result.ok ? "end_turn" : "error",
@@ -741,12 +811,19 @@ export class CopilotAcpAdapter {
     }
 
     if (slashCommand.name === "/help") {
-      this.sendText(session?.id, commandHelpText(slashCommand.rawArgs));
+      this.sendText(session?.id, this.config.copilotBackend === "native-acp"
+        ? nativeCommandHelpText(this.availableNativeCommands(session?.id), slashCommand.rawArgs)
+        : commandHelpText(slashCommand.rawArgs));
       return this.commandDone(slashCommand, { handledBy: "adapter" });
     }
 
     if (slashCommand.name === "/changelog") {
       return this.handleChangelogCommand(session, slashCommand, signal);
+    }
+
+    if (this.config.copilotBackend === "native-acp" && !NATIVE_HELPER_COMMANDS.has(slashCommand.name)) {
+      this.sendText(session?.id, `${slashCommand.name} is not available in native Copilot ACP. Use /help for this session's commands; use the client's session picker to resume conversations.`);
+      return this.commandDone(slashCommand, { handledBy: "adapter", error: "unsupported ACP command" }, "error");
     }
 
     if (slashCommand.name === "/skills") {
@@ -811,12 +888,15 @@ export class CopilotAcpAdapter {
       case "/usage":
         return this.handleUsageCommand(session, slashCommand, false);
       case "/theme":
+        if (this.config.copilotBackend === "native-acp") return this.runConfigCommand(session, slashCommand, ["theme", ...parseCommandArgs(slashCommand.rawArgs)], signal);
         return this.handleSimpleSettingCommand(session, slashCommand, "theme", "github");
       case "/experimental":
+        if (this.config.copilotBackend === "native-acp") return this.runConfigCommand(session, slashCommand, ["experimental", ...parseCommandArgs(slashCommand.rawArgs)], signal);
         return this.handleSimpleSettingCommand(session, slashCommand, "experimental", false, "boolean");
       case "/memory":
         return this.handleSimpleSettingCommand(session, slashCommand, "memory", true, "boolean");
       case "/keep-alive":
+        if (this.config.copilotBackend === "native-acp") return this.runConfigCommand(session, slashCommand, ["keepAlive", ...parseCommandArgs(slashCommand.rawArgs)], signal);
         return this.handleSimpleSettingCommand(session, slashCommand, "keepAlive", "off", "keepAlive");
       case "/limits":
         return this.handleLimitsCommand(session, slashCommand);
@@ -824,16 +904,54 @@ export class CopilotAcpAdapter {
       case "/clear":
         return this.handleNewCommand(session, slashCommand);
       case "/exit":
+        if (this.config.copilotBackend === "native-acp") {
+          this.sendText(session?.id, "Usage: /exit (no arguments). This closes the native ACP session.");
+          return this.commandDone(slashCommand, { handledBy: "adapter", error: "unexpected exit arguments" }, "error");
+        }
         this.sendText(session?.id, "ACP session closed in the adapter.");
         this.sessions.delete(session.id);
         return this.commandDone(slashCommand, { handledBy: "adapter" });
       case "/subagents":
         return this.handleSubagentsCommand(session, slashCommand);
       case "/settings":
+        if (this.config.copilotBackend === "native-acp") {
+          const args = parseCommandArgs(slashCommand.rawArgs);
+          const key = args[0] === "unset" ? args[1] : args[0];
+          // Copilot's config CLI explicitly refuses complex subagent values.
+          if (!isSupportedAdapterSetting(key)) {
+            return this.runConfigCommand(session, slashCommand,
+              !args.length ? ["--list"] : args[0] === "unset" ? ["--rm", ...args.slice(1)] : args, signal);
+          }
+        }
         return this.handleSettingsCommand(session, slashCommand);
       default:
         return null;
     }
+  }
+
+  async runConfigCommand(session, slashCommand, args, signal) {
+    if (basename(this.config.copilotSettingsPath) !== "settings.json") {
+      this.sendText(session?.id, "Copilot's config CLI requires a settings.json filename. Set COPILOT_SETTINGS_PATH to a settings.json path to use this command.");
+      return this.commandDone(slashCommand, { handledBy: "adapter", error: "unsupported settings path" }, "error");
+    }
+    const result = await this.runner.runCommand(this.config.copilotCommand, ["config", ...args], {
+      cwd: session?.cwd || this.config.cwd,
+      env: {
+        COPILOT_AUTO_UPDATE: "false",
+        ...this.globalEnv,
+        ...(session?.env || {}),
+        // Honor custom adapter settings paths without changing user files.
+        COPILOT_HOME: dirname(this.config.copilotSettingsPath),
+      },
+      timeoutMs: this.config.requestTimeoutMs,
+      signal,
+    });
+    this.sendOutput(session?.id, result);
+    if (result.ok && (args.includes("--rm") || args.filter((arg) => !arg.startsWith("--")).length > 1)) {
+      this.sendText(session?.id, "Saved Copilot settings. Restart the session for startup settings to take effect.");
+    }
+    return this.commandDone(slashCommand, { handledBy: "copilot-config", exitCode: result.exitCode },
+      result.aborted ? "cancelled" : result.ok ? "end_turn" : "error");
   }
 
   async handleChangelogCommand(session, slashCommand, signal) {
@@ -1348,6 +1466,7 @@ export class CopilotAcpAdapter {
   }
 
   nativeModeIdFromConfigOption(sessionId, configId, value) {
+    if (this.sessions.get(sessionId)?.nativeConfigOptions?.some((option) => option.id === configId)) return null;
     const session = this.sessions.get(sessionId);
     if (!session?.nativeModeConfigIds?.includes(configId)) {
       return null;
@@ -1545,11 +1664,15 @@ export class CopilotAcpAdapter {
       if (!restarted) {
         return { restarted: false, notes: [], error: "" };
       }
+      this.nativeCommands.clear();
+      this.nativeSubagentStarts.clear();
+      this.reportedNativeActivities.clear();
+      this.modelReportTurns.clear();
       return {
         restarted: true,
         notes: [
           "Restarted the Copilot ACP backend so it picks up the new credentials.",
-          "Copilot-side sessions did not survive the restart — run `/new` or start a new agent-shell before your next prompt.",
+          "Copilot-side sessions did not survive the restart. Start a new agent-shell or load a conversation through the client's session picker before your next prompt.",
         ],
         error: "",
       };
@@ -1574,12 +1697,14 @@ export class CopilotAcpAdapter {
 
   sendAvailableCommands(sessionId) {
     const session = this.sessions.get(sessionId);
-    const projectSkills = discoverProjectSkills(session?.cwd || this.config.cwd).skills;
+    const availableCommands = this.config.copilotBackend === "native-acp"
+      ? this.availableNativeCommands(sessionId)
+      : listAvailableCommands(discoverProjectSkills(session?.cwd || this.config.cwd).skills);
     this.notify("session/update", {
       sessionId,
       update: {
         sessionUpdate: "available_commands_update",
-        availableCommands: listAvailableCommands(projectSkills),
+        availableCommands,
       },
     });
   }
@@ -1593,8 +1718,9 @@ export class CopilotAcpAdapter {
     }
   }
 
-  createJsonEventForwarder(sessionId) {
+  createJsonEventForwarder(sessionId, onEvent) {
     return createCopilotJsonEventForwarder({
+      onEvent,
       sendAgentMessage: (text) => this.sendText(sessionId, text, "agent_message_chunk"),
       sendThought: (text) => this.sendText(sessionId, text, "agent_thought_chunk"),
       sendToolCall: (toolCall) => this.sendToolCall(sessionId, "tool_call", toolCall),
@@ -1694,6 +1820,7 @@ function extractPromptText(params) {
       .map((part) => (typeof part === "string" ? part : part?.text || ""))
       .join("");
   }
+  if (typeof params.content === "string") return params.content;
   return "";
 }
 
@@ -1710,18 +1837,23 @@ function mergeAuthMethods(nativeMethods = [], localMethods = []) {
   return result;
 }
 
-function mergeConfigOptions(nativeOptions = [], localOptions = []) {
-  const result = [];
-  const seen = new Set();
-  for (const option of [...(nativeOptions || []), ...(localOptions || [])]) {
-    const key = option?.id || option?.category;
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    result.push(option);
+function modelsFromConfigOptions(configOptions = []) {
+  const option = (configOptions || []).find((entry) => entry?.category === "model" || entry?.id === "model");
+  if (!option) return null;
+  const flatten = (options = []) => options.flatMap((entry) => entry.options ? flatten(entry.options) : [{
+    modelId: entry.value, name: entry.name, description: entry.description, ...(entry._meta ? { _meta: entry._meta } : {}),
+  }]);
+  return { currentModelId: option.currentValue, availableModels: flatten(option.options) };
+}
+
+function nativeCommandHelpText(commands, rawArgs) {
+  const [topic] = parseCommandArgs(rawArgs);
+  if (topic) {
+    const command = commands.find((entry) => entry.name === topic.replace(/^\//, ""));
+    return command ? `/${command.name} - ${command.description}\n${command.input?.hint || ""}`
+      : `${topic} is not available in this ACP session. Use /help for the current commands.`;
   }
-  return result;
+  return ["Copilot ACP adapter commands:", "", ...commands.map((entry) => `/${entry.name} - ${entry.description}`)].join("\n");
 }
 
 function mergeAvailableCommands(nativeCommands = [], localCommands = []) {
@@ -2095,6 +2227,19 @@ function nativeModeIds(modes = {}) {
       .filter((mode) => mode?.id)
       .map((mode) => [normalizeModeId(mode.id), mode.id]),
   );
+}
+
+function modeIdsFromConfigOptions(configOptions = []) {
+  return Object.fromEntries((configOptions || [])
+    .filter((option) => option.category === "mode")
+    .flatMap((option) => (option.options || []).map((entry) => [normalizeModeId(entry.value), entry.value])));
+}
+
+function modesFromConfigOptions(configOptions = []) {
+  const option = (configOptions || []).find((entry) => entry?.category === "mode");
+  if (!option) return null;
+  return { currentModeId: option.currentValue,
+    availableModes: (option.options || []).map((entry) => ({ id: entry.value, name: entry.name, description: entry.description })) };
 }
 
 function nativeModeConfigIds(configOptions = []) {

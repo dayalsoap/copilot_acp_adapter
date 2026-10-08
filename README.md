@@ -40,7 +40,7 @@ export PATH="$HOME/.local/bin:$PATH"
 copilot --version
 ```
 
-This adapter has been smoke-tested with GitHub Copilot CLI `1.0.77`.
+This adapter has been smoke-tested with GitHub Copilot CLI `1.0.93`.
 
 Configuration is environment-based:
 
@@ -76,7 +76,7 @@ COPILOT_SESSION_STATE_PATH=$HOME/.copilot/session-state
 - `session/list`: lists previous Copilot CLI conversations for the requested `cwd`.
 - `session/load`: resumes a previous Copilot CLI conversation by session id.
 - `prompt` or `session/prompt`: routes slash commands or forwards prompt text to Copilot, emitting output through `session/update`.
-- `session/close`: drops adapter-side session state.
+- `session/close` or `closeSession`: closes the native session and clears adapter-side state.
 - `session/cancel`: accepted for clients that send cancellation notifications.
 - `_commands/list`: extension method returning the adapter command catalog.
 
@@ -122,37 +122,27 @@ built-in `--acp` mode:
         "COPILOT_ACP_ARGS=[\"--acp\",\"--no-color\"]"))
 ```
 
-The adapter asks Copilot's native ACP server for its filtered model list before
-advertising models to `agent-shell`, so administrator-disabled models should be
-omitted from `M-x agent-shell-set-session-model`. To set the initial model
-explicitly:
+Native ACP owns model, mode, reasoning-effort, agent, and permission configuration.
+The adapter preserves Copilot's `configOptions`, `models`, and `modes` metadata,
+including administrator-filtered model choices. It does not launch a second
+Copilot process to discover models when the session already supplies native
+metadata. For older servers lacking metadata, the compatibility discovery path
+remains available. `COPILOT_MODELS` continues to configure prompt fallback.
+
+Current clients can change configuration with `session/set_config_option`.
+Native options are forwarded unchanged; older synthesized mode options retain
+the `session/set_mode` bridge. Native `/autopilot` is forwarded when advertised;
+the older bare-command mode bridge is used only when the server lacks that
+command. Copilot owns permission prompts in both cases.
+
+To use Copilot without this adapter, use agent-shell's native command:
 
 ```elisp
-(add-to-list 'agent-shell-github-environment
-             "COPILOT_MODEL=claude-sonnet-5")
-(add-to-list 'agent-shell-github-environment
-             "COPILOT_MODEL_NAME=Claude Sonnet 5")
+(setq agent-shell-github-acp-command '("copilot" "--acp"))
 ```
 
-The adapter passes the active model to Copilot as `--model <id>` for prompts.
-`agent-shell` can change it at runtime through either ACP's model picker
-metadata or `session/set_config_option`. On session start, the adapter probes the
-native `copilot --acp` server for the plan-filtered model picker and exposes it
-through both `models.availableModels` and `configOptions[id=model]`.
-Use `COPILOT_MODELS` as a comma-separated or JSON array override to skip native
-ACP discovery. If native ACP does not expose models, the adapter falls back to
-the installed CLI's `copilot help config` model choices. If both discovery paths
-fail or time out, the adapter only advertises `auto` plus the current configured
-model.
-The session mode defaults to `Agent` and can be changed from the `agent-shell`
-mode menu when available. Selecting `Autopilot` with
-`M-x agent-shell-set-session-mode` uses Copilot's native ACP mode-change flow,
-which asks for the autopilot permission level. Entering a bare `/autopilot`
-command uses that same flow, so it presents the same permission choices instead
-of bypassing the picker or requiring a separate `/allow-all` command. Current
-`agent-shell` versions express mode-menu changes as `session/set_config_option`;
-the adapter translates those requests to Copilot's native `session/set_mode`
-method so the picker is retained.
+The wrapper remains useful for text-based `/diff`, `/subagents`, `/settings`,
+headless authentication, changelog access, and dispatch-model reporting.
 
 By default, `agent-shell` starts sessions at the project root. To start Copilot
 in the current Emacs `default-directory` instead, for example after `M-x cd` into
@@ -186,57 +176,58 @@ the adapter replies to `initialize` and `session/new`.
 
 ## Slash Commands
 
-All commands from `AGENTS.md` are advertised to the ACP client:
-
-- Agent Environment: `/init`, `/agent`, `/skills`, `/mcp`, `/plugin`
-- Agents/Subagents: `/model`, `/delegate`, `/fleet`, `/autopilot`, `/tasks`
-- Code: `/ide`, `/diff`, `/pr`, `/review`, `/security-review`, `/rubber-duck`, `/lsp`, `/terminal-setup`
-- Permissions: `/allow-all`, `/add-dir`, `/list-dirs`, `/cwd`, `/reset-allowed-tools`
-- Session: `/resume`, `/rename`, `/context`, `/usage`, `/session`, `/compact`, `/share`, `/remote`, `/copy`, `/rewind`
-- Help: `/help`, `/changelog`, `/feedback`, `/diagnose`, `/theme`, `/statusline`, `/footer`, `/update`, `/version`, `/experimental`, `/memory`, `/clear`, `/instructions`, `/app`
-- Other: `/ask`, `/chronicle`, `/env`, `/exit`, `/keep-alive`, `/limits`, `/login`, `/logout`, `/new`, `/plan`, `/research`, `/restart`, `/search`, `/settings`, `/subagents`, `/user`, `/voice`
+In native ACP mode, the authoritative command list comes from Copilot's
+`available_commands_update` notifications. Each notification replaces the
+previous snapshot, including enabled skills discovered by Copilot. The adapter
+adds only helpers it actually implements and re-sends the current snapshot
+after session creation/loading so clients can register the session first.
+It does not add local skills behind Copilot's filtering or advertise every
+terminal command from `AGENTS.md`.
 
 ### Command routing
 
-The default `COPILOT_BACKEND=native-acp` runs a persistent `copilot --acp`
-backend. The adapter intercepts the following commands; all other advertised
-commands and ordinary prompts are sent unchanged to native Copilot ACP.
-
 | Command | Adapter behavior |
 | --- | --- |
-| `/login` | Handles GitHub.com, GitHub Enterprise, and API-key authentication. |
-| `/logout` | Clears adapter-held token environment variables. It does not perform an interactive Copilot CLI OAuth logout. |
-| `/help` | Displays the adapter command help. |
-| `/changelog` | Fetches and displays the Copilot CLI changelog. |
-| `/autopilot` | Sends a native ACP `session/set_mode` request, including Copilot's autopilot permission-level picker. |
+| `/login` | Handles GitHub.com, GitHub Enterprise, and API-key authentication. Native ACP `copilot-login` authentication is forwarded. |
+| `/logout` | Clears adapter-held tokens and restarts the backend. OAuth logout still requires the interactive CLI. |
+| `/help` | Displays this session's native commands plus implemented helpers. |
+| `/changelog` | Fetches the official Copilot CLI changelog. |
 | `/diff` | Runs local `git diff`. |
-| `/settings` | Manages adapter-supported settings, including per-subagent settings. |
-| `/subagents` | Reads and writes local Copilot subagent configuration. |
-| `/theme` | Reads and writes the local theme preference. |
-| `/experimental` | Reads and writes the local experimental-feature setting. |
-| `/memory` | Reads and writes the local memory setting. |
-| `/keep-alive` | Reads and writes the local keep-alive setting. |
-| `/limits` | Maintains the adapter session's AI-credit limit value. |
-| `/exit` | Closes the adapter ACP session. |
-| `/version` | Runs `copilot --version` directly. |
-| `/update` | Runs `copilot update` directly. |
+| `/settings` | Runs `copilot config --list`; arguments use `copilot config`, with `unset KEY` translated to `--rm KEY`. |
+| `/subagents` | Reads/writes complex per-subagent settings and discovers project agents. |
+| `/settings subagents.agents.NAME ...` | Retains the complex-setting JSON bridge because `copilot config` explicitly refuses these values. |
+| `/theme`, `/experimental`, `/keep-alive` | Read/change the corresponding setting through `copilot config`. Restart for startup settings to take effect. |
+| `/exit` | Closes the native ACP session and clears adapter tracking. |
+| `/version`, `/update` | Run the corresponding CLI command directly. |
 
-In native ACP mode, Copilot owns and receives the following advertised commands:
+For example:
 
-- Agent environment: `/init`, `/agent`, `/skills`, `/mcp`, `/plugin`
-- Agents/subagents: `/model`, `/delegate`, `/fleet`, `/tasks`
-- Code: `/ide`, `/pr`, `/review`, `/security-review`, `/rubber-duck`, `/lsp`, `/terminal-setup`
-- Permissions: `/allow-all`, `/add-dir`, `/list-dirs`, `/cwd`, `/reset-allowed-tools`
-- Session: `/resume`, `/rename`, `/context`, `/usage`, `/session`, `/compact`, `/share`, `/remote`, `/copy`, `/rewind`
-- Help/UI: `/feedback`, `/diagnose`, `/statusline`, `/footer`, `/clear`, `/instructions`, `/app`
-- Other: `/ask`, `/chronicle`, `/env`, `/new`, `/plan`, `/research`, `/restart`, `/search`, `/user`, `/voice`
+```text
+/settings
+/settings footer.showQuota off
+/settings unset theme
+/settings --repo --list --json
+/subagents set explore inherit high long_context
+```
 
-In particular, `/add-dir`, `/allow-all`, `/agent`, `/clear`, `/cwd`, `/model`,
-`/new`, and `/skills` are handled by native Copilot in the default mode, rather
-than by the adapter's compatibility code. The adapter translates bare
-`/autopilot` into Copilot's native mode-change request so it behaves exactly
-like choosing `Autopilot` from the ACP client mode menu. Forms with arguments
-continue to pass through as native slash commands.
+The config CLI requires a file named `settings.json`; `COPILOT_SETTINGS_PATH`
+can select its directory. The complex-setting bridge continues to support
+arbitrary settings filenames.
+
+Other advertised commands are forwarded unchanged, including enabled skill
+commands. Once native discovery arrives, an unadvertised slash command is
+rejected with an explanation instead of being silently sent to the model.
+Terminal commands such as `/resume` and `/tasks` are not synthesized. Use the
+client's session picker (`session/list` and `session/load`) to resume sessions.
+The ineffective adapter-only `/limits` override is not advertised in native
+mode; use native `/autopilot ... --max-ai-credits N` or the startup flag.
+
+The proxy forwards the client's original initialize parameters, including
+filesystem/terminal capabilities and extension metadata. The same negotiation
+is reused after a credential restart. Native session loading and history replay
+stay owned by Copilot; the adapter adopts the loaded session's cwd and metadata
+for its helper commands and reporting. Both `session/close` and the compatibility
+alias `closeSession` close the native session.
 
 #### Prompt fallback routing
 
@@ -254,26 +245,19 @@ discovered project skills; other `/skills` forms invoke `copilot skill ...`.
 All remaining advertised commands are passed as literal text to `copilot -p`,
 which is not equivalent to native interactive slash-command execution.
 
-Unknown slash commands are forwarded to native Copilot ACP in the default mode.
+Before native command discovery arrives, unknown slash commands remain forwarded.
+After discovery, only advertised commands and implemented helpers are accepted.
 In prompt fallback mode, the adapter reports that the command is unknown before
-forwarding it as prompt text. `/agents` is described for compatibility but is
-not an advertised command, so it follows this unknown-command behavior.
+forwarding it as prompt text. `/agents` is not synthesized as an ACP command.
 
 `session/new`'s `cwd` parameter is treated as the client-provided working
 directory. In Emacs agent-shell, this is controlled by
 `agent-shell-cwd-function`; when the client does not send a cwd, the adapter
 uses its startup directory.
 
-The adapter advertises ACP session listing/loading and reads Copilot CLI
-conversation metadata from `$COPILOT_HOME/session-state` or
-`COPILOT_SESSION_STATE_PATH`. `session/list` mirrors Copilot's ACP behavior by
-returning completed conversations whose stored workspace `cwd` matches the
-requested cwd, including Copilot's multiline generated session summaries as
-picker titles. `session/load` maps the selected id to subsequent Copilot prompt
-calls via `--resume=<id>`.
-During `session/load`, the adapter also replays user and assistant messages from
-Copilot's `events.jsonl` as ACP history updates so clients can render the stored
-conversation before it continues.
+Native mode forwards session listing/loading and transcript replay to Copilot.
+Prompt fallback reads conversation metadata from `$COPILOT_HOME/session-state`
+or `COPILOT_SESSION_STATE_PATH`, filters by cwd, and replays stored messages.
 
 `/subagents` is implemented locally by the adapter because Copilot exposes it
 only as an interactive UI command. The adapter discovers project-defined agents
@@ -293,9 +277,9 @@ per-agent model settings from `COPILOT_SETTINGS_PATH` or
 
 `/skills` with no arguments, or `/skills list`, uses the same cwd-first then
 git-root fallback for project skills. It checks `.github/skills/`,
-`.agents/skills/`, and `.claude/skills/`. Discovered project skills are also
-included in ACP `available_commands_update` notifications, so Emacs agent-shell
-can offer them in its slash-command completion. In the default native ACP
+`.agents/skills/`, and `.claude/skills/`. In prompt fallback, discovered project skills are also
+included in ACP `available_commands_update` notifications. Native mode uses
+only the skill commands advertised by Copilot. In the default native ACP
 backend, `/skills` prompts are proxied to Copilot. In the prompt fallback,
 Copilot CLI does not apply interactive skill slash commands itself, so the
 adapter expands a matched project `SKILL.md`, its invocation arguments, and its
@@ -338,9 +322,9 @@ To test automatic skill selection rather than explicit slash invocation, ask:
 Give me an adapter architecture summary and recommend the best next agent-shell test.
 ```
 
-A newly added skill is advertised when an ACP session starts. Restart the
-agent-shell buffer after adding or renaming skills so its completion menu
-receives a fresh command list. Authentication is still required for prompt-mode
+Native mode updates completion whenever Copilot advertises a new command
+snapshot. In prompt fallback, restart the agent-shell buffer after adding or
+renaming skills to refresh locally discovered commands. Authentication is still required for prompt-mode
 skill execution. In the default native ACP backend, `/skills` is proxied to
 Copilot; its local discovery behavior applies in prompt fallback mode.
 
@@ -353,23 +337,16 @@ This repository includes three deliberately distinct project agents under
 - `test-diagnostician`: test execution and failure diagnosis without edits.
 - `adapter-reviewer`: diff review for ACP compatibility and regressions.
 
-Start a fresh agent-shell session in the repository root, then try:
+In native mode, select a custom agent through Copilot's `agent` configuration
+option when it is advertised. Clients without a general configuration picker
+can send `session/set_config_option` with the exact native option ID/value, or
+start Copilot with `--agent adapter-explorer` in `COPILOT_ACP_ARGS`. Do not
+assume `/agent` works unless it appears in the current native command list.
 
-```text
-/agent
-/agent adapter-explorer
-Trace how session/prompt reaches the Copilot CLI.
-/agent test-diagnostician
-Run the unit tests and diagnose the first failure, or suggest a missing test.
-/agent adapter-reviewer
-Review the current diff.
-/agent default
-```
-
-Each test agent begins its final response with a unique `TEST_AGENT=...` marker,
-making it easy to confirm that `/agent` changed the agent used for subsequent
-prompts. `/agent default`, `/agent none`, or `/agent reset` restores Copilot's
-default agent.
+In prompt fallback, `/agent adapter-explorer`, `/agent test-diagnostician`, and
+`/agent adapter-reviewer` select the fixtures. `/agent default` restores the
+default agent. Each fixture's final response starts with a unique
+`TEST_AGENT=...` marker so a model request can confirm selection.
 
 Prompt-mode calls for new adapter sessions include a stable `--session-id` so
 follow-up prompts share Copilot session state. `/new` and `/clear` rotate that
@@ -406,6 +383,44 @@ prompt, messages, routing, or permissions. Reads happen only after a completed
 prompt response (with two short retries), never per streaming token; there are
 no watchers. A report is emitted once per observed tool call, so late evidence
 will not create a contradictory history entry.
+
+### Verbal model-request reporting
+
+A natural-language prompt mentioning a model ID, such as:
+
+```text
+can you run the tests with gpt-5.6-luna with the test runner skill
+```
+
+now receives a visible `Model report` after the response, even when no subagent
+is delegated. IDs from the native model catalog are also recognized with spaces
+in place of hyphens (for example, `GPT 5.6 Luna`). The report distinguishes:
+
+- the model mentioned in the prompt;
+- the session agent/model selected in Copilot;
+- session model calls recorded by `model.call_start` or `assistant.usage`;
+- structured skill invocations and delegation requests;
+- a delegated agent and its first dispatched model recorded by a correlated
+  `subagent.completed` event.
+
+If dispatch evidence is unavailable, the output explicitly identifies the
+session model or subagent override **requested from Copilot**, without claiming
+it was used. A skill's name is not treated as a model or an agent. The adapter
+observes execution and does not rewrite the prompt or change model selection.
+
+Native mode reads only a bounded 256 KiB journal tail appended after that
+prompt began. Historical events, assistant prose, configuration, and
+`assistant.message.model` are not dispatch evidence. Streamed JSONL events can
+provide additional evidence in prompt fallback. Runtime events such as
+`assistant.usage` are ephemeral and may be absent from the native journal, so
+native session-model reporting can fall back to the requested model. Model
+call events describe Copilot's runtime routing/usage, not independently verified
+provider serving-model telemetry.
+
+Concurrent prompts in one session prevent reliable attribution and are labeled
+as such; closing/restarting a session clears report tracking. Reports are emitted
+once per model-mentioning prompt, including failed/cancelled requests, and never
+establish that the requested tests or task actually completed.
 
 ### Opt-in live verification
 
@@ -459,3 +474,16 @@ on success or failure.
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+## Verification against Copilot 1.0.93
+
+Offline `npm test` includes a subprocess integration check with a fake native
+ACP peer: client capability negotiation (including credential restart), native
+command snapshots, configuration metadata, permission round trips, token usage,
+session loading/history, and both close paths. It never launches Copilot.
+
+A live protocol smoke check can use `/context` to exercise command execution
+without a model request. Model prompts and subagent dispatch remain covered by
+the separate opt-in `test:live` suite. The native raw-event additions in 1.0.81
+are not assumed to expose `firstDispatchedModel`; the bounded journal reader
+remains until that specific evidence is verified on the wire.

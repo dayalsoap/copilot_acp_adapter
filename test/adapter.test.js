@@ -150,7 +150,7 @@ test("adopted native sessions retain Copilot's autopilot mode id", async () => {
   );
 });
 
-test("adopted native sessions recognize native mode config option ids", async () => {
+test("native mode config option ids remain native config requests", async () => {
   const { adapter } = createAdapter();
   await adapter.adoptNativeSession({}, {
     sessionId: "native-session",
@@ -159,7 +159,7 @@ test("adopted native sessions recognize native mode config option ids", async ()
 
   assert.equal(
     adapter.nativeModeIdFromConfigOption("native-session", "copilot-mode", "plan"),
-    "plan",
+    null,
   );
   assert.equal(
     adapter.nativeModeIdFromConfigOption("native-session", "model", "gpt-5.4"),
@@ -167,8 +167,8 @@ test("adopted native sessions recognize native mode config option ids", async ()
   );
 });
 
-test("native command updates retain adapter commands and project skills", async () => {
-  const { adapter } = createAdapter();
+test("native command snapshots retain helpers without inventing commands or skills", async () => {
+  const { adapter, notifications } = createAdapter({ config: { copilotBackend: "native-acp" } });
   const repo = mkdtempSync(join(tmpdir(), "copilot-acp-native-commands-"));
   mkdirSync(join(repo, ".git"));
   mkdirSync(join(repo, ".github", "skills", "adapter-smoke-test"), { recursive: true });
@@ -186,22 +186,61 @@ test("native command updates retain adapter commands and project skills", async 
       update: {
         sessionUpdate: "available_commands_update",
         availableCommands: [
-          { name: "help", description: "Native help" },
           { name: "refine", description: "Native-only command" },
+          { name: "enabled-skill", description: "Native enabled skill" },
         ],
       },
     },
   });
   const commands = message.params.update.availableCommands;
 
-  assert.deepEqual(commands.find((command) => command.name === "help"), {
-    name: "help",
-    description: "Native help",
-  });
   assert.equal(commands.filter((command) => command.name === "help").length, 1);
   assert.equal(commands.some((command) => command.name === "refine"), true);
-  assert.equal(commands.some((command) => command.name === "agent"), true);
-  assert.equal(commands.some((command) => command.name === "adapter-smoke-test"), true);
+  assert.equal(commands.some((command) => command.name === "enabled-skill"), true);
+  assert.equal(commands.some((command) => command.name === "resume"), false);
+  assert.equal(commands.some((command) => command.name === "tasks"), false);
+  assert.equal(commands.some((command) => command.name === "limits"), false);
+  assert.equal(commands.some((command) => command.name === "adapter-smoke-test"), false);
+  await flushSessionUpdates();
+  assert.deepEqual(notifications.at(-1).params.update.availableCommands, commands,
+    "the deferred update must not overwrite the native snapshot");
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { sessionId, prompt: "/enabled-skill" }), false);
+  const unavailable = await adapter.handle("session/prompt", { sessionId, prompt: "/resume" });
+  assert.equal(unavailable.stopReason, "error");
+  const refreshed = adapter.enhanceNativeMessage({ method: "session/update", params: {
+    sessionId, update: { sessionUpdate: "available_commands_update", availableCommands: [] },
+  } });
+  assert.equal(refreshed.params.update.availableCommands.some((command) => command.name === "enabled-skill"), false);
+});
+
+test("native metadata is authoritative and config-only models avoid discovery", async () => {
+  const { adapter } = createAdapter({ config: { copilotBackend: "native-acp", copilotModelsOverride: false } });
+  const configOptions = [{ id: "native-model", category: "model", currentValue: "permitted", options: [
+    { name: "Allowed", options: [{ value: "permitted", name: "Permitted", _meta: { multiplier: 2 } }] },
+  ] }];
+  const result = await adapter.adoptNativeSession({ cwd: "/loaded" }, { sessionId: "native", configOptions }, { loaded: true });
+  assert.equal(result.configOptions, configOptions);
+  assert.deepEqual(result.models.availableModels, [{ modelId: "permitted", name: "Permitted", description: undefined, _meta: { multiplier: 2 } }]);
+  assert.equal(adapter.sessions.get("native").resumeExisting, true);
+  assert.equal(adapter.sessions.get("native").cwd, "/loaded");
+});
+
+test("native simple settings use CLI validation and preserve complex setting bridge", async () => {
+  const { adapter, runner, settingsPath } = createAdapter({ config: { copilotBackend: "native-acp" } });
+  const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "settings", models: { availableModels: [], currentModelId: "auto" } });
+  for (const [prompt, expected] of [
+    ["/settings", ["config", "--list"]],
+    ["/settings footer.showQuota off", ["config", "footer.showQuota", "off"]],
+    ["/settings unset theme", ["config", "--rm", "theme"]],
+    ["/theme github", ["config", "theme", "github"]],
+    ["/experimental on", ["config", "experimental", "on"]],
+  ]) {
+    await adapter.handle("session/prompt", { sessionId, prompt });
+    assert.deepEqual(runner.calls.at(-1).args, expected);
+  }
+  await adapter.handle("session/prompt", { sessionId, prompt: "/subagents set explore inherit high inherit" });
+  assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).subagents.agents.explore.effortLevel, "high");
+  assert.equal(runner.calls.length, 5);
 });
 
 test("native skill and subagent tool calls announce their activity", () => {

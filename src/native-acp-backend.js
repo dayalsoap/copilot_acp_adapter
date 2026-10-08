@@ -98,6 +98,7 @@ export class NativeAcpBackend extends EventEmitter {
     this.connection = new JsonRpcConnection(stdout, stdin);
     this.connection.framing = "newline";
     this.connection.on("message", (message) => {
+      if (this.child !== child) return;
       try {
         const result = this.handleBackendMessage(message);
         if (result?.catch) result.catch((error) => this.emit("backendError", error));
@@ -106,12 +107,12 @@ export class NativeAcpBackend extends EventEmitter {
         this.emit("backendError", error);
       }
     });
-    this.connection.on("parseError", (error) => this.rejectAll(error));
+    this.connection.on("parseError", (error) => { if (this.child === child) this.rejectAll(error); });
     // Streams can fail independently of the ChildProcess (notably ENOENT and
     // broken FIFO/stdin). Reject waiting callers immediately rather than only
     // after their request timeout.
-    stdin.on?.("error", (error) => this.rejectAll(error));
-    stdout.on?.("error", (error) => this.rejectAll(error));
+    stdin.on?.("error", (error) => { if (this.child === child) this.rejectAll(error); });
+    stdout.on?.("error", (error) => { if (this.child === child) this.rejectAll(error); });
     this.connection.start();
     child.stderr?.on("data", (chunk) => this.emit("stderr", chunk.toString()));
     child.on("error", (error) => {
@@ -126,7 +127,11 @@ export class NativeAcpBackend extends EventEmitter {
         return;
       }
       const error = new Error(`Native Copilot ACP exited with code ${code}${signal ? ` signal ${signal}` : ""}`);
-      setImmediate(() => this.rejectAll(error));
+      // Final stdout can arrive around close. Defer rejection, but capture only
+      // this child's outstanding IDs so a new handshake is never rejected.
+      const requestIds = new Set([...this.pendingBackendRequests.keys(), ...this.forwardedClientRequests.keys()]);
+      const responseIds = new Set(this.forwardedClientResponses.keys());
+      setImmediate(() => this.rejectAll(error, requestIds, responseIds));
       this.child = null;
       this.connection = null;
       this.cleanupFifo();
@@ -261,8 +266,9 @@ export class NativeAcpBackend extends EventEmitter {
     await Promise.allSettled([...this.pendingDeliveries]);
   }
 
-  rejectAll(error) {
+  rejectAll(error, requestIds = null, responseIds = null) {
     for (const [id, pending] of this.pendingBackendRequests) {
+      if (requestIds && !requestIds.has(id)) continue;
       if (pending.timeout) {
         clearTimeout(pending.timeout);
       }
@@ -273,6 +279,7 @@ export class NativeAcpBackend extends EventEmitter {
     // Requests the client is still waiting on. Without this the client hangs
     // forever on a turn the backend will never answer.
     for (const [backendId, forwarded] of this.forwardedClientRequests) {
+      if (requestIds && !requestIds.has(backendId)) continue;
       this.forwardedClientRequests.delete(backendId);
       const response = {
         jsonrpc: "2.0",
@@ -290,7 +297,11 @@ export class NativeAcpBackend extends EventEmitter {
     }
 
     // Responses the backend was waiting on can never be delivered now.
-    this.forwardedClientResponses.clear();
+    if (responseIds) {
+      for (const id of responseIds) this.forwardedClientResponses.delete(id);
+    } else {
+      this.forwardedClientResponses.clear();
+    }
   }
 
   async restart(env = {}) {
@@ -301,6 +312,7 @@ export class NativeAcpBackend extends EventEmitter {
     }
 
     const closed = new Promise((resolve) => child.once("close", resolve));
+    this.rejectAll(new Error("Native Copilot ACP backend restarting"));
     this.close();
     await Promise.race([closed, delay(2000)]);
 

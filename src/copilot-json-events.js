@@ -5,12 +5,14 @@ export function createCopilotJsonEventForwarder({
   sendThought,
   sendToolCall,
   sendToolCallUpdate,
+  onEvent,
 }) {
   return new CopilotJsonEventForwarder({
     sendAgentMessage,
     sendThought,
     sendToolCall,
     sendToolCallUpdate,
+    onEvent,
   });
 }
 
@@ -63,6 +65,7 @@ class CopilotJsonEventForwarder {
   }
 
   handleEvent(event) {
+    this.callbacks.onEvent?.(event);
     switch (event.type) {
       case "session.auto_mode_resolved":
         this.emitStatus(autoModeStatus(event.data));

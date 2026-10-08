@@ -14,15 +14,15 @@ Other:  /ask ,  /chronicle ,  /env ,  /exit ,  /keep-alive ,  /limits ,  /login 
 
 For login, I need to be able to support logging in via github.com and github enterprise, as well as potentially providing an API key.
 
-## Current Implementation Handoff
+## Implementation Handoff
 
 This repository is currently a dependency-free Node.js ACP adapter. It exposes an ACP v1-style JSON-RPC/stdio server and, by default, proxies prompts, permission requests, and Copilot-owned slash commands to a persistent native `copilot --acp` subprocess.
 
 ### Local Tooling State
 
 - Node.js is available and the package uses native `node --test`; no npm dependencies are required.
-- The official GitHub Copilot CLI is installed at `/home/jai/.local/bin/copilot`.
-- The installed Copilot CLI was verified as `GitHub Copilot CLI 1.0.77`.
+- On this Mac, the official GitHub Copilot CLI is installed at `/opt/homebrew/bin/copilot`; `/home/jai/.local/bin/copilot` remains the Linux fallback.
+- The installed Copilot CLI was verified as `GitHub Copilot CLI 1.0.93`.
 - The adapter defaults to `/home/jai/.local/bin/copilot` when present, otherwise `copilot`.
 - Native ACP initialization and proxy transport smoke testing succeeded on this machine; full prompt testing still requires authentication.
 
@@ -97,7 +97,7 @@ Relevant environment variables:
 - `/login api-key <token>` stores the token in adapter session env as `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_TOKEN`.
 - Login runs headless by default with `BROWSER=echo` and `CI=1`, so Emacs receives a copyable device-flow URL/code instead of Copilot trying to open a browser on the host running the adapter.
 - ACP `authenticate` supports method IDs `github.com`, `github-enterprise`, and `api-key`.
-- ACP `logout` currently only clears adapter-held token environment. Copilot CLI 1.0.77 does not expose a top-level `copilot logout`; `/logout` is an interactive slash command.
+- ACP `logout` currently only clears adapter-held token environment. Copilot CLI 1.0.93 does not expose a top-level `copilot logout`; `/logout` is an interactive slash command.
 
 ### Known Gaps / Next Work
 
@@ -108,5 +108,33 @@ Relevant environment variables:
 - The richer `agent-shell` header comes from `session/new` `models` and `modes` fields. The adapter displays the configured model/mode, but cannot discover Copilot's server-selected `auto` model unless Copilot exposes it.
 - The default backend now proxies most traffic to a persistent native `copilot --acp` subprocess. Validate permission round-trips in the real Emacs `agent-shell` client, especially `/add-dir`, `/allow-all`, and tool approvals.
 - `COPILOT_BACKEND=prompt` keeps the older subprocess-per-prompt path for fallback/debugging, but it does not provide native ACP permission prompts.
-- Add integration tests once authentication is available. Start with `/help`, `/skills`, `/agent`, `/mcp`, `/add-dir`, and a plain prompt.
-- Replace generic command descriptions in `src/commands.js` with the exact text from `copilot help commands` if client UX needs richer command menus.
+- The offline fake-peer integration test covers negotiation, permissions, command snapshots, loading and closing. Model/subagent live testing remains opt-in.
+- Native command descriptions come from Copilot notifications; the static catalog is retained for prompt fallback and implemented helpers.
+
+## Native ACP update (2026-10-07)
+
+- Copilot CLI 1.0.93 is installed on the Mac via `/opt/homebrew/bin/copilot`.
+- Native command snapshots and enabled skills are authoritative; add only
+  implemented text helpers. Reject unadvertised slash commands after discovery.
+- Preserve client initialize capabilities and native configuration metadata.
+  Native mode must not launch a second model-discovery process when metadata
+  already exists. Prefer native configuration requests and native autopilot.
+- Adopt loaded native sessions and close upstream sessions on `/exit` or close.
+- Simple settings use `copilot config`; complex per-subagent settings still
+  require the JSON bridge, as explicitly confirmed by the current CLI.
+- Keep bounded journal dispatch evidence until native raw events are verified
+  to provide the exact first-dispatched-model fields.
+- `npm test` includes a fake-peer subprocess integration test. Use read-only
+  `/context` for protocol smoke testing without model usage.
+
+## Verbal model reports
+
+- Natural-language model mentions trigger a visible report even without delegation.
+- Distinguish the user's mention, the session model selected/requested from
+  Copilot, observed model-call/usage events, and correlated subagent completions.
+- Report actual agent/model evidence when available; otherwise label the values
+  sent to Copilot as requested. Never use model prose or the desired model as proof.
+- Read only bounded journal bytes appended since the prompt began; ignore
+  historical/child events and decline attribution for overlapping prompts.
+- Keep prompt text and model routing unchanged. Offline checks cover direct
+  skills, mismatched agents/models, unavailable evidence, and both backends.

@@ -9,6 +9,7 @@ export async function main({ input = process.stdin, output = process.stdout } = 
   let connection;
   let nativeBackend;
   let nativeInitializePromise;
+  let nativeInitializeParams;
 
   // Environment cannot be injected into a running process, so credential changes
   // have to relaunch `copilot --acp` and re-run the ACP handshake.
@@ -22,13 +23,7 @@ export async function main({ input = process.stdin, output = process.stdout } = 
   };
 
   const startNativeInitialize = () => {
-    nativeInitializePromise = nativeBackend.request("initialize", {
-      protocolVersion: 1,
-      clientInfo: {
-        name: "copilot-acp-adapter",
-        version: "0.1.0",
-      },
-    });
+    nativeInitializePromise = nativeBackend.request("initialize", nativeInitializeParams);
     nativeInitializePromise.then(
       () => nativeBackend.notify("initialized", {}),
       () => {},
@@ -76,7 +71,6 @@ export async function main({ input = process.stdin, output = process.stdout } = 
         process.stderr.write(text);
       }
     });
-    startNativeInitialize();
   }
 
   connection.on("message", (message) => {
@@ -84,7 +78,12 @@ export async function main({ input = process.stdin, output = process.stdout } = 
       adapter,
       nativeBackend,
       // Read lazily: a credential change relaunches the backend and replaces this.
-      getNativeInitialize: () => nativeInitializePromise,
+      getNativeInitialize: (params) => {
+        // Wait for the actual client's initialize request; extensions and
+        // filesystem/terminal capabilities must survive the proxy and restart.
+        nativeInitializeParams ||= params || { protocolVersion: 1 };
+        return nativeInitializePromise || startNativeInitialize();
+      },
       connection,
       message,
     }).finally(() => inFlight.delete(task));
@@ -139,10 +138,12 @@ async function handleMessage({ adapter, nativeBackend, getNativeInitialize, conn
 
 async function proxyRequest({ adapter, nativeBackend, getNativeInitialize, connection, message }) {
   if (message.method === "initialize") {
-    const result = adapter.enhanceInitialize(await getNativeInitialize());
+    const result = adapter.enhanceInitialize(await getNativeInitialize(message.params));
     sendResult(connection, message, result);
     return;
   }
+
+  await getNativeInitialize();
 
   if (message.method === "session/new" || message.method === "newSession") {
     const result = await adapter.adoptNativeSession(
@@ -150,6 +151,25 @@ async function proxyRequest({ adapter, nativeBackend, getNativeInitialize, conne
       await nativeBackend.request("session/new", message.params || {}),
     );
     sendResult(connection, message, result);
+    return;
+  }
+
+  if (message.method === "session/load") {
+    const result = await adapter.adoptNativeSession(
+      message.params || {},
+      await nativeBackend.request("session/load", message.params || {}),
+      { loaded: true },
+    );
+    sendResult(connection, message, result);
+    return;
+  }
+
+  const exiting = isNativeExit(message);
+  if (exiting || message.method === "session/close" || message.method === "closeSession") {
+    const params = { sessionId: message.params?.sessionId };
+    const result = await nativeBackend.request("session/close", params);
+    adapter.closeSession(params);
+    sendResult(connection, message, exiting ? { stopReason: "end_turn" } : result);
     return;
   }
 
@@ -178,7 +198,7 @@ async function proxyRequest({ adapter, nativeBackend, getNativeInitialize, conne
     message,
     adapter.nativeModeId(message.params?.sessionId, "autopilot"),
   );
-  if (autopilotModeMessage) {
+  if (autopilotModeMessage && !adapter.nativeCommands.get(message.params?.sessionId)?.some((command) => command.name === "autopilot")) {
     nativeBackend.forwardClientMessage(autopilotModeMessage, (response) => {
       if (response.error) {
         return response;
@@ -198,14 +218,26 @@ async function proxyRequest({ adapter, nativeBackend, getNativeInitialize, conne
   }
 
   const nativeMessage = normalizeNativeMessage(message);
-  nativeBackend.forwardClientMessage(nativeMessage, (response) => enhanceNativePromptResponse(adapter, nativeMessage, response));
+  const report = nativeMessage.method === "session/prompt"
+    ? adapter.beginModelReport(nativeMessage.params?.sessionId, modelPromptText(nativeMessage.params || {}))
+    : null;
+  try {
+    nativeBackend.forwardClientMessage(nativeMessage, (response) => enhanceNativePromptResponse(adapter, nativeMessage, response, report));
+  } catch (error) {
+    await adapter.finishModelReport(report, { error });
+    throw error;
+  }
 }
 
 // Exported for an offline server-hook regression test. This is called only for
 // the completed prompt response, never for streamed session/update messages.
-export async function enhanceNativePromptResponse(adapter, nativeMessage, response) {
-  if (!response.error && (nativeMessage.method === "session/prompt" || nativeMessage.method === "prompt")) {
-    await adapter.reportNativeSubagentDispatch(nativeMessage.params?.sessionId);
+export async function enhanceNativePromptResponse(adapter, nativeMessage, response, report = null) {
+  try {
+    if (!response.error && (nativeMessage.method === "session/prompt" || nativeMessage.method === "prompt")) {
+      await adapter.reportNativeSubagentDispatch(nativeMessage.params?.sessionId);
+    }
+  } finally {
+    await adapter.finishModelReport?.(report, response);
   }
   return response;
 }
@@ -300,7 +332,15 @@ function nativePromptText(params) {
   return null;
 }
 
+function modelPromptText(params) {
+  if (Array.isArray(params.prompt)) {
+    return params.prompt.filter((part) => part?.type === "text").map((part) => part.text || "").join("\n");
+  }
+  return nativePromptText(params) || "";
+}
+
 function shouldProxyToNative(adapter, message) {
+  if (isNativeExit(message)) return true;
   if (message.method === "initialize" || message.method === "session/new" || message.method === "newSession") {
     return true;
   }
@@ -308,6 +348,11 @@ function shouldProxyToNative(adapter, message) {
     return true;
   }
   return !adapter.shouldHandleLocally(message.method, message.params || {});
+}
+
+function isNativeExit(message) {
+  return (message.method === "session/prompt" || message.method === "prompt") &&
+    nativePromptText(message.params || {})?.trim() === "/exit";
 }
 
 function sendResult(connection, message, result) {
