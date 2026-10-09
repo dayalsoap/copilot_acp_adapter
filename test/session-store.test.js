@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   listStoredSessions,
+  normalizeSessionListResult,
   parseWorkspace,
   readStoredTranscript,
   readStoredUsage,
@@ -36,7 +37,7 @@ test("lists generated summaries and omits unfinished unnamed sessions", () => {
   assert.deepEqual(listStoredSessions({ sessionStatePath: root, cwd: "/repo" }), [{
     sessionId: "summarized",
     cwd: "/repo",
-    title: "Detailed summary\nMore context...",
+    title: "Detailed summary More context...",
     updatedAt: statUpdatedAt(join(root, "summarized", "events.jsonl")),
   }]);
 });
@@ -72,3 +73,21 @@ test("reads the latest completed usage snapshot", () => {
 function statUpdatedAt(path) {
   return statSync(path).mtime.toISOString();
 }
+
+test("session list titles collapse embedded newlines for single-line pickers", () => {
+  const result = normalizeSessionListResult({
+    sessions: [
+      { sessionId: "a", title: "This PR:\n\nhttps://example/pull/1447\n\n  Can you  review?" },
+      { sessionId: "b" },
+    ],
+    nextCursor: "c",
+  });
+  assert.deepEqual(result, {
+    sessions: [
+      { sessionId: "a", title: "This PR: https://example/pull/1447 Can you review?" },
+      { sessionId: "b" },
+    ],
+    nextCursor: "c",
+  });
+  assert.equal(normalizeSessionListResult(null), null);
+});

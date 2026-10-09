@@ -3,6 +3,7 @@ import { loadConfig } from "./config.js";
 import { CopilotRunner } from "./copilot-runner.js";
 import { JsonRpcConnection } from "./json-rpc.js";
 import { NativeAcpBackend } from "./native-acp-backend.js";
+import { normalizeSessionListResult } from "./session-store.js";
 
 export async function main({ input = process.stdin, output = process.stdout } = {}) {
   const config = loadConfig();
@@ -161,6 +162,12 @@ async function proxyRequest({ adapter, nativeBackend, getNativeInitialize, conne
       { loaded: true },
     );
     sendResult(connection, message, result);
+    return;
+  }
+
+  if (message.method === "session/list") {
+    const result = await nativeBackend.request("session/list", message.params || {});
+    sendResult(connection, message, normalizeSessionListResult(result));
     return;
   }
 

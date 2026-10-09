@@ -1,6 +1,21 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+// Copilot titles sessions with the first prompt verbatim; embedded newlines make
+// single-line session pickers (e.g. agent-shell under helm) unreadable.
+export function normalizeSessionTitle(title) {
+  return typeof title === "string" ? title.replace(/\s+/g, " ").trim() : title;
+}
+
+export function normalizeSessionListResult(result) {
+  if (!Array.isArray(result?.sessions)) return result;
+  return {
+    ...result,
+    sessions: result.sessions.map((session) =>
+      typeof session?.title === "string" ? { ...session, title: normalizeSessionTitle(session.title) } : session),
+  };
+}
+
 export function listStoredSessions({ sessionStatePath, cwd, limit = 50 }) {
   const targetCwd = resolve(cwd || process.cwd());
   const sessions = [];
@@ -31,7 +46,7 @@ export function listStoredSessions({ sessionStatePath, cwd, limit = 50 }) {
     sessions.push({
       sessionId: workspace.id || entry.name,
       cwd: workspace.cwd || targetCwd,
-      title: workspace.name,
+      title: normalizeSessionTitle(workspace.name),
       updatedAt,
     });
   }
