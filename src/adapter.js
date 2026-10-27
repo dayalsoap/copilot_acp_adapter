@@ -141,11 +141,13 @@ export class CopilotAcpAdapter {
     }
 
     if (this.config.copilotBackend === "native-acp") {
-      if (NATIVE_HELPER_COMMANDS.has(slashCommand.name)) return true;
+      const commands = this.nativeCommands.get(params.sessionId);
+      const advertised = Boolean(commands?.some((command) => `/${command.name}` === slashCommand.name));
+      // Native wins a name collision once it has advertised the command.
+      if (NATIVE_HELPER_COMMANDS.has(slashCommand.name)) return !advertised;
       // ACP treats unsupported slash commands as model prompts. Once native
       // discovery has arrived, reject those instead of pretending to run them.
-      const commands = this.nativeCommands.get(params.sessionId);
-      return Boolean(commands && !commands.some((command) => `/${command.name}` === slashCommand.name));
+      return Boolean(commands && !advertised);
     }
 
     if (
@@ -308,7 +310,8 @@ export class CopilotAcpAdapter {
 
   availableNativeCommands(sessionId) {
     const helpers = listAvailableCommands().filter((command) => NATIVE_HELPER_COMMANDS.has(`/${command.name}`));
-    return mergeAvailableCommands(helpers, this.nativeCommands.get(sessionId));
+    // Native first, so a collision shows native's description for the command it runs.
+    return mergeAvailableCommands(this.nativeCommands.get(sessionId), helpers);
   }
 
   enhanceNativeMessages(message = {}) {

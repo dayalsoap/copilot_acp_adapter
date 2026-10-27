@@ -503,6 +503,32 @@ test("native backend mode proxies Copilot-owned slash commands", () => {
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/settings" }), true);
 });
 
+test("a native-advertised command wins over a same-named adapter helper", async () => {
+  const { adapter } = createAdapter({ config: { copilotBackend: "native-acp" } });
+  await adapter.adoptNativeSession({}, { sessionId: "native" });
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { sessionId: "native", prompt: "/changelog" }), true,
+    "before native discovery the helper still runs locally");
+  const message = adapter.enhanceNativeMessage({ method: "session/update", params: { sessionId: "native", update: {
+    sessionUpdate: "available_commands_update",
+    availableCommands: [{ name: "changelog", description: "Native changelog" }],
+  } } });
+
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { sessionId: "native", prompt: "/changelog" }), false);
+  const changelog = message.params.update.availableCommands.filter((command) => command.name === "changelog");
+  assert.deepEqual(changelog.map((command) => command.description), ["Native changelog"]);
+});
+
+test("an adapter helper native doesn't advertise is still handled locally", async () => {
+  const { adapter } = createAdapter({ config: { copilotBackend: "native-acp" } });
+  await adapter.adoptNativeSession({}, { sessionId: "native" });
+  adapter.enhanceNativeMessage({ method: "session/update", params: { sessionId: "native", update: {
+    sessionUpdate: "available_commands_update", availableCommands: [{ name: "context", description: "Native context" }],
+  } } });
+
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { sessionId: "native", prompt: "/changelog" }), true);
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { sessionId: "native", prompt: "/context" }), false);
+});
+
 test("prompt fallback keeps new, clear, and memory local", () => {
   const { adapter } = createAdapter({
     config: { copilotBackend: "prompt" },
