@@ -37,7 +37,7 @@ const MAX_TRACKED_SUBAGENTS = 500;
 // Only helpers implemented by this adapter belong beside native commands.
 const NATIVE_HELPER_COMMANDS = new Set([
   "/login", "/logout", "/help", "/changelog", "/diff", "/settings",
-  "/subagents", "/theme", "/experimental", "/keep-alive", "/exit",
+  "/subagents", "/experimental", "/keep-alive", "/exit",
   "/version", "/update",
 ]);
 
@@ -170,7 +170,6 @@ export class CopilotAcpAdapter {
         "/session",
         "/context",
         "/usage",
-        "/theme",
         "/experimental",
         "/memory",
         "/keep-alive",
@@ -501,37 +500,6 @@ export class CopilotAcpAdapter {
         },
         _meta: {
           slashCommandPassthrough: true,
-          copilotTransports: ["prompt", "stdin", "argv", "command"],
-          copilotCommands: listCommands(),
-          nativeCommands: [
-            "/help",
-            "/agent",
-            "/model",
-            "/autopilot",
-            "/cwd",
-            "/add-dir",
-            "/list-dirs",
-            "/diff",
-            "/allow-all",
-            "/reset-allowed-tools",
-            "/resume",
-            "/rename",
-            "/session",
-            "/context",
-            "/usage",
-            "/new",
-            "/clear",
-            "/logout",
-            "/exit",
-            "/settings",
-            "/subagents",
-            "/theme",
-            "/experimental",
-            "/memory",
-            "/keep-alive",
-            "/limits",
-          ],
-          directCopilotCommands: Object.keys(DIRECT_COPILOT_COMMANDS),
         },
       },
       agentInfo: {
@@ -890,9 +858,6 @@ export class CopilotAcpAdapter {
         return this.handleUsageCommand(session, slashCommand, true);
       case "/usage":
         return this.handleUsageCommand(session, slashCommand, false);
-      case "/theme":
-        if (this.config.copilotBackend === "native-acp") return this.runConfigCommand(session, slashCommand, ["theme", ...parseCommandArgs(slashCommand.rawArgs)], signal);
-        return this.handleSimpleSettingCommand(session, slashCommand, "theme", "github");
       case "/experimental":
         if (this.config.copilotBackend === "native-acp") return this.runConfigCommand(session, slashCommand, ["experimental", ...parseCommandArgs(slashCommand.rawArgs)], signal);
         return this.handleSimpleSettingCommand(session, slashCommand, "experimental", false, "boolean");
@@ -1940,7 +1905,6 @@ function commandHelpRouting(name) {
       "/exit",
       "/settings",
       "/subagents",
-      "/theme",
       "/experimental",
       "/memory",
       "/keep-alive",

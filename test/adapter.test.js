@@ -232,7 +232,6 @@ test("native simple settings use CLI validation and preserve complex setting bri
     ["/settings", ["config", "--list"]],
     ["/settings footer.showQuota off", ["config", "footer.showQuota", "off"]],
     ["/settings unset theme", ["config", "--rm", "theme"]],
-    ["/theme github", ["config", "theme", "github"]],
     ["/experimental on", ["config", "experimental", "on"]],
   ]) {
     await adapter.handle("session/prompt", { sessionId, prompt });
@@ -240,7 +239,7 @@ test("native simple settings use CLI validation and preserve complex setting bri
   }
   await adapter.handle("session/prompt", { sessionId, prompt: "/subagents set explore inherit high inherit" });
   assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).subagents.agents.explore.effortLevel, "high");
-  assert.equal(runner.calls.length, 5);
+  assert.equal(runner.calls.length, 4);
 });
 
 test("native skill and subagent tool calls announce their activity", () => {
@@ -527,6 +526,8 @@ test("an adapter helper native doesn't advertise is still handled locally", asyn
 
   assert.equal(adapter.shouldHandleLocally("session/prompt", { sessionId: "native", prompt: "/changelog" }), true);
   assert.equal(adapter.shouldHandleLocally("session/prompt", { sessionId: "native", prompt: "/context" }), false);
+  assert.equal(adapter.availableNativeCommands("native").some((command) => command.name === "theme"), false,
+    "/theme is a terminal color setting with no meaning in an ACP client");
 });
 
 test("prompt fallback keeps new, clear, and memory local", () => {
@@ -881,7 +882,6 @@ test("non-model session commands are handled without prompt mode", async () => {
   const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
 
   await adapter.handle("session/prompt", { sessionId, prompt: "/agent explore" });
-  await adapter.handle("session/prompt", { sessionId, prompt: "/theme dim" });
   await adapter.handle("session/prompt", { sessionId, prompt: "/experimental on" });
   await adapter.handle("session/prompt", { sessionId, prompt: "/memory off" });
   await adapter.handle("session/prompt", { sessionId, prompt: "/keep-alive busy" });
