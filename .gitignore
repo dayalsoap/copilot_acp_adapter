@@ -7,3 +7,6 @@ npm-debug.log*
 # agent-shell session artifacts. Transcripts record whatever was typed at the
 # prompt, and `/login api-key <token>` arrives as a prompt.
 .agent-shell/
+
+# Output of scripts/probe-native-acp.mjs (machine-specific native ACP snapshot).
+scripts/native-acp-probe.json
