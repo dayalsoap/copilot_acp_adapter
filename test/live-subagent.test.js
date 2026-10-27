@@ -206,7 +206,6 @@ function launchNative(cwd, requestTimeout, config) {
 
 function launchAdapter(cwd, requestTimeout) {
   return new ProcessClient(process.execPath, [adapterBin], cwd, requestTimeout, {
-    COPILOT_BACKEND: "native-acp",
     COPILOT_ACP_TRANSPORT: "fifo",
     ...childEnv(cwd),
   });

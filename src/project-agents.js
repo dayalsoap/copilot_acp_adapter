@@ -2,25 +2,12 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 
 const AGENT_EXTENSIONS = new Set(["", ".json", ".md", ".markdown", ".yaml", ".yml"]);
-const SKILL_EXTENSIONS = new Set(["", ".md", ".markdown"]);
 
 export function discoverProjectAgents(cwd) {
   return discoverProjectResources(cwd, {
     kind: "agent",
     directories: [[".github", "agents"]],
     extensions: AGENT_EXTENSIONS,
-  });
-}
-
-export function discoverProjectSkills(cwd) {
-  return discoverProjectResources(cwd, {
-    kind: "skill",
-    directories: [
-      [".github", "skills"],
-      [".agents", "skills"],
-      [".claude", "skills"],
-    ],
-    extensions: SKILL_EXTENSIONS,
   });
 }
 

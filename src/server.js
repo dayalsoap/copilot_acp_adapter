@@ -3,7 +3,7 @@ import { loadConfig } from "./config.js";
 import { CopilotRunner } from "./copilot-runner.js";
 import { JsonRpcConnection } from "./json-rpc.js";
 import { NativeAcpBackend } from "./native-acp-backend.js";
-import { normalizeSessionListResult } from "./session-store.js";
+import { normalizeSessionListResult } from "./session-title.js";
 
 export async function main({ input = process.stdin, output = process.stdout } = {}) {
   const config = loadConfig();
@@ -50,29 +50,27 @@ export async function main({ input = process.stdin, output = process.stdout } = 
   });
   const inFlight = new Set();
   const keepAlive = setInterval(() => {}, 2 ** 31 - 1);
-  if (config.copilotBackend === "native-acp") {
-    nativeBackend = new NativeAcpBackend({
-      command: config.copilotCommand,
-      args: config.copilotAcpArgs,
-      cwd: config.cwd,
-      transport: config.copilotAcpTransport,
-      env: {
-        COPILOT_AUTO_UPDATE: "false",
-        ...adapter.globalEnv,
-      },
-      requestTimeoutMs: config.copilotAcpRequestTimeoutMs,
-      sendToClient(message) {
-        for (const enhanced of adapter.enhanceNativeMessages(message)) {
-          connection?.send(enhanced);
-        }
-      },
-    });
-    nativeBackend.on("stderr", (text) => {
-      if (text.trim()) {
-        process.stderr.write(text);
+  nativeBackend = new NativeAcpBackend({
+    command: config.copilotCommand,
+    args: config.copilotAcpArgs,
+    cwd: config.cwd,
+    transport: config.copilotAcpTransport,
+    env: {
+      COPILOT_AUTO_UPDATE: "false",
+      ...adapter.globalEnv,
+    },
+    requestTimeoutMs: config.copilotAcpRequestTimeoutMs,
+    sendToClient(message) {
+      for (const enhanced of adapter.enhanceNativeMessages(message)) {
+        connection?.send(enhanced);
       }
-    });
-  }
+    },
+  });
+  nativeBackend.on("stderr", (text) => {
+    if (text.trim()) {
+      process.stderr.write(text);
+    }
+  });
 
   connection.on("message", (message) => {
     const task = handleMessage({
@@ -109,14 +107,12 @@ async function handleMessage({ adapter, nativeBackend, getNativeInitialize, conn
   }
 
   if (!isRequest(message)) {
-    if (nativeBackend?.forwardClientMessage(message)) {
-      return;
-    }
+    nativeBackend.forwardClientMessage(message);
     return;
   }
 
   try {
-    if (nativeBackend && shouldProxyToNative(adapter, message)) {
+    if (shouldProxyToNative(adapter, message)) {
       await proxyRequest({ adapter, nativeBackend, getNativeInitialize, connection, message });
       return;
     }
@@ -159,7 +155,6 @@ async function proxyRequest({ adapter, nativeBackend, getNativeInitialize, conne
     const result = await adapter.adoptNativeSession(
       message.params || {},
       await nativeBackend.request("session/load", message.params || {}),
-      { loaded: true },
     );
     sendResult(connection, message, result);
     return;
@@ -224,9 +219,14 @@ async function proxyRequest({ adapter, nativeBackend, getNativeInitialize, conne
     return;
   }
 
-  const nativeMessage = normalizeNativeMessage(message);
+  const nativeMessage = normalizeNativeMessage(await rewriteChangelogSummary(adapter, connection, message));
+  if (!nativeMessage) {
+    return;
+  }
+  // The user's own text, so release notes in a rewritten /changelog summary
+  // can't trigger a model report.
   const report = nativeMessage.method === "session/prompt"
-    ? adapter.beginModelReport(nativeMessage.params?.sessionId, modelPromptText(nativeMessage.params || {}))
+    ? adapter.beginModelReport(nativeMessage.params?.sessionId, modelPromptText(message.params || {}))
     : null;
   try {
     nativeBackend.forwardClientMessage(nativeMessage, (response) => enhanceNativePromptResponse(adapter, nativeMessage, response, report));
@@ -234,6 +234,24 @@ async function proxyRequest({ adapter, nativeBackend, getNativeInitialize, conne
     await adapter.finishModelReport(report, { error });
     throw error;
   }
+}
+
+// `/changelog summarize` runs as an ordinary native prompt carrying the notes.
+// Returns null once a fetch failure has been answered locally.
+export async function rewriteChangelogSummary(adapter, connection, message) {
+  const isPrompt = message.method === "session/prompt" || message.method === "prompt";
+  if (!isPrompt || !adapter.isChangelogSummary(message.params || {})) {
+    return message;
+  }
+  let text;
+  try {
+    text = await adapter.changelogSummaryPrompt(message.params || {});
+  } catch (error) {
+    sendResult(connection, message, adapter.changelogFailure(message.params?.sessionId, { name: "/changelog" }, error));
+    return null;
+  }
+  const { text: _text, content: _content, ...params } = message.params || {};
+  return { ...message, method: "session/prompt", params: { ...params, prompt: [{ type: "text", text }] } };
 }
 
 // Exported for an offline server-hook regression test. This is called only for

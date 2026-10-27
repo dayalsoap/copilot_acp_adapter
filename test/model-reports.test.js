@@ -15,8 +15,8 @@ async function fixture(t, options = {}) {
   writeFileSync(journal, `${JSON.stringify({ type: "model.call_start", data: { model: "old-history-model" } })}\n`);
   const updates = [];
   const adapter = new CopilotAcpAdapter({
-    config: { cwd: root, copilotBackend: "native-acp", copilotSessionStatePath: root,
-      copilotModelsOverride: true, copilotModels: ["gpt-5.6-terra", "gpt-5.6-luna"], copilotModel: "gpt-5.6-terra", copilotArgs: [], ...options.config },
+    config: { cwd: root, copilotSessionStatePath: root,
+      copilotModelsOverride: true, copilotModels: ["gpt-5.6-terra", "gpt-5.6-luna"], copilotModel: "gpt-5.6-terra", ...options.config },
     runner: options.runner || {},
     notify(method, params) { updates.push({ method, params }); },
   });
@@ -121,25 +121,3 @@ test("journal reads are bounded, skip old and partial records, and reject replac
   assert.equal(snapshotModelJournal(f.root, "../escape"), null);
 });
 
-test("prompt fallback uses streamed usage evidence and leaves requested routing unchanged", async (t) => {
-  const calls = [];
-  const f = await fixture(t, { config: { copilotBackend: "prompt" }, runner: {
-    async runPrompt(prompt, options) {
-      calls.push({ prompt, args: options.copilotArgs });
-      for (const event of [
-        { type: "tool.execution_start", data: { toolCallId: "skill", toolName: "skill", arguments: { skill: "test-runner" } } },
-        { type: "assistant.usage", data: { model: "recorded-response-model" } },
-        { type: "assistant.message", data: { content: "Tests passed" } },
-      ]) options.onStdout(`${JSON.stringify(event)}\n`);
-      return { ok: true, stdout: "", stderr: "" };
-    },
-  } });
-  const prompt = "run tests with gpt-5.6-luna with the test-runner skill";
-  await f.adapter.handle("session/prompt", { sessionId: "session", prompt });
-  assert.equal(calls[0].prompt, prompt);
-  assert.deepEqual(calls[0].args.slice(0, 2), ["--model", "gpt-5.6-terra"]);
-  assert.deepEqual(f.report()._meta.recordedModels, ["recorded-response-model"]);
-  assert.equal(f.report()._meta.evidence, "assistant.usage");
-  assert.deepEqual(f.report()._meta.skills, ["test-runner"]);
-  assert.equal(JSON.parse(readFileSync(f.journal, "utf8")).data.model, "old-history-model");
-});

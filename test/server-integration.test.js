@@ -61,7 +61,7 @@ test("proxy preserves negotiation, native metadata, permissions, load and close 
   `);
   const child = spawn(process.execPath, ["bin/copilot-acp-adapter.js"], {
     cwd: new URL("..", import.meta.url),
-    env: { ...process.env, COPILOT_BACKEND: "native-acp", COPILOT_COMMAND: process.execPath,
+    env: { ...process.env, COPILOT_COMMAND: process.execPath,
       COPILOT_GITHUB_TOKEN: "fake-test-token",
       COPILOT_SESSION_STATE_PATH: join(root, "state"),
       COPILOT_ACP_ARGS: JSON.stringify([peerPath]), COPILOT_ACP_TRANSPORT: "stdio", COPILOT_CWD: root },

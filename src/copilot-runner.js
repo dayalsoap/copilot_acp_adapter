@@ -1,70 +1,13 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
 export class CopilotRunner {
   constructor(config) {
     this.config = config;
   }
 
-  runPrompt(prompt, options = {}) {
-    const config = { ...this.config, ...options };
-    const env = { ...process.env, ...(config.env || {}) };
-    const timeoutMs = Number(config.requestTimeoutMs || 0);
-
-    let args = [...(config.copilotArgs || [])];
-    if (config.copilotTransport === "prompt" && options.jsonEvents !== false) {
-      args = withJsonEventArgs(args);
-    }
-
-    if (config.copilotTransport === "prompt") {
-      args = [...args, "-p", prompt];
-    }
-
-    if (config.copilotTransport === "argv") {
-      args = [...args, prompt];
-    }
-
-    if (config.copilotTransport === "command") {
-      const slash = String(prompt).trimStart().split(/\s+/)[0];
-      args = [...args, slash, String(prompt).trimStart().slice(slash.length).trimStart()];
-    }
-
-    return runProcess({
-      command: config.copilotCommand,
-      args,
-      input: config.copilotTransport === "stdin" ? `${prompt}\n` : "",
-      cwd: config.cwd,
-      env,
-      timeoutMs,
-      signal: options.signal,
-      onStdout: options.onStdout,
-      onStderr: options.onStderr,
-    });
-  }
-
-  async runCommand(command, args, options = {}) {
+  runCommand(command, args, options = {}) {
     const config = { ...this.config, ...options };
     const env = { ...process.env, ...(options.env || {}) };
-
-    if (options.forceTty) {
-      const ptyCommand = buildPtyCommand(command, args, env);
-      if (ptyCommand) {
-        const ptyResult = await runProcess({
-          command: ptyCommand.command,
-          args: ptyCommand.args,
-          input: options.input || "",
-          cwd: config.cwd,
-          env,
-          timeoutMs: Number(options.timeoutMs ?? config.requestTimeoutMs ?? 0),
-          signal: options.signal,
-        });
-
-        if (!isPtyWrapperFailure(ptyResult)) {
-          options.onStdout?.(ptyResult.stdout);
-          options.onStderr?.(ptyResult.stderr);
-          return ptyResult;
-        }
-      }
-    }
 
     return runProcess({
       command,
@@ -244,100 +187,3 @@ function abortReasonMessage(reason) {
   return String(reason);
 }
 
-export function withJsonEventArgs(args) {
-  const result = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === "--silent" || arg === "-s") {
-      continue;
-    }
-    if (arg === "--output-format" || arg === "--stream") {
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--output-format=") || arg.startsWith("--stream=")) {
-      continue;
-    }
-    result.push(arg);
-  }
-  result.push("--output-format", "json", "--stream", "on");
-  return result;
-}
-
-export function isPtyWrapperFailure(result) {
-  if (result.ok) {
-    return false;
-  }
-
-  const output = `${result.stdout || ""}\n${result.stderr || ""}\n${result.error || ""}`.toLowerCase();
-  return [
-    "illegal option",
-    "tcgetattr",
-    "ioctl",
-    "operation not supported on socket",
-    "inappropriate ioctl",
-    "not a tty",
-    "unexpected number of arguments",
-    "eperm",
-  ].some((pattern) => output.includes(pattern));
-}
-
-export function buildPtyCommand(command, args, env = process.env) {
-  const style = detectScriptStyle(env);
-  if (style === "none") {
-    return null;
-  }
-
-  if (style === "bsd") {
-    return {
-      command: "script",
-      args: ["-q", "/dev/null", command, ...args],
-    };
-  }
-
-  return {
-    command: "script",
-    args: [
-      "-q",
-      "-e",
-      "-c",
-      [command, ...args].map(shellQuote).join(" "),
-      "/dev/null",
-    ],
-  };
-}
-
-let cachedScriptStyle = null;
-
-export function detectScriptStyle(env = process.env) {
-  const override = env.COPILOT_SCRIPT_STYLE;
-  if (["util-linux", "bsd", "none"].includes(override)) {
-    return override;
-  }
-
-  if (cachedScriptStyle) {
-    return cachedScriptStyle;
-  }
-
-  const result = spawnSync("script", ["--help"], {
-    encoding: "utf8",
-    env,
-  });
-
-  if (result.error?.code === "ENOENT") {
-    cachedScriptStyle = "none";
-    return cachedScriptStyle;
-  }
-
-  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
-  cachedScriptStyle = output.includes("--command") ? "util-linux" : "bsd";
-  return cachedScriptStyle;
-}
-
-function shellQuote(value) {
-  const text = String(value);
-  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(text)) {
-    return text;
-  }
-  return `'${text.replaceAll("'", "'\\''")}'`;
-}

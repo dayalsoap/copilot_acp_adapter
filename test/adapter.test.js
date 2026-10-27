@@ -18,10 +18,6 @@ function createAdapter(options = {}) {
   const notifications = [];
   const runner = {
     calls,
-    async runPrompt(prompt, options) {
-      calls.push({ type: "prompt", prompt, options });
-      return { ok: true, exitCode: 0, stdout: `ran: ${prompt}`, stderr: "" };
-    },
     async runCommand(command, args, options) {
       calls.push({ type: "command", command, args, options });
       if (args[0] === "login") {
@@ -38,7 +34,6 @@ function createAdapter(options = {}) {
     config: {
       cwd: "/tmp",
       copilotCommand: "/home/jai/.local/bin/copilot",
-      copilotArgs: ["--allow-all-tools", "--model", "ignored-base-model"],
       copilotModel: "claude-sonnet-5",
       copilotModelName: "Claude Sonnet 5",
       copilotModels: ["auto", "claude-sonnet-5", "gpt-5.4", "gemini-3.5-flash"],
@@ -73,7 +68,7 @@ test("changelog is fetched directly instead of sent as a model prompt", async ()
   const { adapter, runner, notifications } = createAdapter({
     fetchImpl: async () => ({ ok: true, text: async () => "# Changelog\n\n## 1.0.0\n\nFast.\n" }),
   });
-  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+  const { sessionId } = await adapter.adoptNativeSession({ cwd: "/repo" }, { sessionId: "native" });
   const result = await adapter.handle("session/prompt", { sessionId, prompt: "/changelog" });
 
   assert.equal(result.stopReason, "end_turn");
@@ -82,52 +77,40 @@ test("changelog is fetched directly instead of sent as a model prompt", async ()
   assert.equal(notifications.some((item) => item.params.update.content?.text.includes("Fast.")), true);
 });
 
-function writeStoredWorkspace(sessionStateDir, sessionId, fields) {
-  const sessionDir = join(sessionStateDir, sessionId);
-  mkdirSync(sessionDir, { recursive: true });
-  const lines = [
-    `id: ${sessionId}`,
-    `cwd: ${fields.cwd}`,
-    fields.name ? `name: ${fields.name}` : "",
-    `updated_at: ${fields.updated_at}`,
-  ].filter(Boolean);
-  writeFileSync(join(sessionDir, "workspace.yaml"), `${lines.join("\n")}\n`);
-  const eventsPath = join(sessionDir, "events.jsonl");
-  const events = fields.events || [{ type: "session.start" }];
-  writeFileSync(eventsPath, events.map((event) => JSON.stringify(event)).join("\n") + "\n");
-  const updatedAt = new Date(fields.updated_at);
-  utimesSync(eventsPath, updatedAt, updatedAt);
-}
+test("changelog summarize becomes a native prompt carrying the selected notes", async () => {
+  const { adapter } = createAdapter({
+    fetchImpl: async () => ({ ok: true, text: async () => "# Changelog\n\n## 1.0.1\n\nNewer.\n\n## 1.0.0\n\nFast.\n" }),
+  });
+  const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "native" });
+  const params = { sessionId, prompt: "/changelog summarize 1.0.0" };
 
-test("initialize exposes ACP v1 capabilities and auth methods", async () => {
-  const { adapter } = createAdapter();
-  const result = await adapter.handle("initialize");
-  assert.equal(result.protocolVersion, 1);
-  assert.equal(result.agentCapabilities._meta.slashCommandPassthrough, true);
-  assert.equal(result.agentCapabilities.loadSession, true);
-  assert.deepEqual(result.agentCapabilities.sessionCapabilities.list, {});
-  assert.equal(result.authMethods.some((method) => method.id === "github-enterprise"), true);
+  assert.equal(adapter.isChangelogSummary(params), true);
+  assert.equal(adapter.shouldHandleLocally("session/prompt", params), false);
+  const text = await adapter.changelogSummaryPrompt(params);
+  assert.match(text, /^Summarize these official GitHub Copilot CLI release notes/);
+  assert.match(text, /Fast\./);
+  assert.doesNotMatch(text, /Newer\./);
+  assert.equal(adapter.isChangelogSummary({ sessionId, prompt: "/changelog 1.0.0" }), false);
 });
 
-test("session/new exposes model and mode metadata for agent-shell header", async () => {
+test("initialize keeps native capabilities and adds adapter auth methods", () => {
   const { adapter } = createAdapter();
-  const result = await adapter.handle("session/new", { cwd: "/repo" });
-
-  assert.equal(result.models.currentModelId, "claude-sonnet-5");
-  assert.equal(
-    result.models.availableModels.find((model) => model.modelId === "claude-sonnet-5").name,
-    "Claude Sonnet 5",
-  );
-  assert.deepEqual(
-    result.models.availableModels.map((model) => model.modelId),
-    ["auto", "claude-sonnet-5", "gpt-5.4", "gemini-3.5-flash"],
-  );
-  assert.deepEqual(
-    result.configOptions.find((option) => option.id === "model").options.map((option) => option.value),
-    ["auto", "claude-sonnet-5", "gpt-5.4", "gemini-3.5-flash"],
-  );
-  assert.equal(result.modes.currentModeId, "agent");
-  assert.equal(result.modes.availableModes.some((mode) => mode.id === "plan"), true);
+  const result = adapter.enhanceInitialize({
+    protocolVersion: 1,
+    agentCapabilities: { loadSession: true, sessionCapabilities: { list: {}, close: {} } },
+    agentInfo: { name: "Copilot", version: "1.0.104" },
+    authMethods: [{ id: "copilot-login", name: "Log in with Copilot CLI" }],
+  });
+  assert.equal(result.protocolVersion, 1);
+  assert.equal(result.agentCapabilities.loadSession, true);
+  assert.deepEqual(result.agentCapabilities.sessionCapabilities, { list: {}, close: {} });
+  assert.deepEqual(result.agentCapabilities.auth, { logout: {} });
+  assert.equal(result.agentCapabilities._meta.backend, "native-acp-proxy");
+  assert.equal(result.agentInfo.name, "copilot-acp-adapter");
+  assert.equal(result.agentInfo._meta.nativeAgentInfo.version, "1.0.104");
+  assert.deepEqual(result.authMethods.map((method) => method.id).slice(0, 2), ["copilot-login", "github.com"]);
+  assert.equal(result.authMethods.some((method) => method.id === "github-enterprise"), true);
+  assert.equal(result.authMethods.some((method) => method.id === "api-key"), true);
 });
 
 test("adopted native sessions retain Copilot's autopilot mode id", async () => {
@@ -168,7 +151,7 @@ test("native mode config option ids remain native config requests", async () => 
 });
 
 test("native command snapshots retain helpers without inventing commands or skills", async () => {
-  const { adapter, notifications } = createAdapter({ config: { copilotBackend: "native-acp" } });
+  const { adapter, notifications } = createAdapter();
   const repo = mkdtempSync(join(tmpdir(), "copilot-acp-native-commands-"));
   mkdirSync(join(repo, ".git"));
   mkdirSync(join(repo, ".github", "skills", "adapter-smoke-test"), { recursive: true });
@@ -176,7 +159,7 @@ test("native command snapshots retain helpers without inventing commands or skil
     join(repo, ".github", "skills", "adapter-smoke-test", "SKILL.md"),
     "---\nname: adapter-smoke-test\ndescription: Run the adapter smoke test\n---\n",
   );
-  const { sessionId } = await adapter.handle("session/new", { cwd: repo });
+  const { sessionId } = await adapter.adoptNativeSession({ cwd: repo }, { sessionId: "native" });
 
   const message = adapter.enhanceNativeMessage({
     jsonrpc: "2.0",
@@ -214,19 +197,18 @@ test("native command snapshots retain helpers without inventing commands or skil
 });
 
 test("native metadata is authoritative and config-only models avoid discovery", async () => {
-  const { adapter } = createAdapter({ config: { copilotBackend: "native-acp", copilotModelsOverride: false } });
+  const { adapter } = createAdapter({ config: { copilotModelsOverride: false } });
   const configOptions = [{ id: "native-model", category: "model", currentValue: "permitted", options: [
     { name: "Allowed", options: [{ value: "permitted", name: "Permitted", _meta: { multiplier: 2 } }] },
   ] }];
-  const result = await adapter.adoptNativeSession({ cwd: "/loaded" }, { sessionId: "native", configOptions }, { loaded: true });
+  const result = await adapter.adoptNativeSession({ cwd: "/loaded" }, { sessionId: "native", configOptions });
   assert.equal(result.configOptions, configOptions);
   assert.deepEqual(result.models.availableModels, [{ modelId: "permitted", name: "Permitted", description: undefined, _meta: { multiplier: 2 } }]);
-  assert.equal(adapter.sessions.get("native").resumeExisting, true);
   assert.equal(adapter.sessions.get("native").cwd, "/loaded");
 });
 
 test("native simple settings use CLI validation and preserve complex setting bridge", async () => {
-  const { adapter, runner, settingsPath } = createAdapter({ config: { copilotBackend: "native-acp" } });
+  const { adapter, runner, settingsPath } = createAdapter();
   const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "settings", models: { availableModels: [], currentModelId: "auto" } });
   for (const [prompt, expected] of [
     ["/settings", ["config", "--list"]],
@@ -289,187 +271,38 @@ test("native skill and subagent tool calls announce their activity", () => {
   assert.equal(subagentMessages[1].params.update.toolCallId, "task-1");
 });
 
-test("session/list returns stored conversations for the requested cwd", async () => {
-  const { adapter, sessionStateDir } = createAdapter();
-  writeStoredWorkspace(sessionStateDir, "older", {
-    cwd: "/repo",
-    name: "Older session",
-    updated_at: "2026-01-01T00:00:00.000Z",
-  });
-  writeStoredWorkspace(sessionStateDir, "newer", {
-    cwd: "/repo",
-    name: "Newer session",
-    updated_at: "2026-01-02T00:00:00.000Z",
-  });
-  writeStoredWorkspace(sessionStateDir, "other", {
-    cwd: "/other",
-    name: "Other session",
-    updated_at: "2026-01-03T00:00:00.000Z",
-  });
-
-  const result = await adapter.handle("session/list", { cwd: "/repo" });
-
-  assert.deepEqual(result.sessions, [
-    {
-      sessionId: "newer",
-      cwd: "/repo",
-      title: "Newer session",
-      updatedAt: "2026-01-02T00:00:00.000Z",
-    },
-    {
-      sessionId: "older",
-      cwd: "/repo",
-      title: "Older session",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    },
-  ]);
-});
-
-test("session/load resumes prompts with Copilot resume flag", async () => {
-  const { adapter, runner, notifications, sessionStateDir } = createAdapter();
-  writeStoredWorkspace(sessionStateDir, "stored-session", {
-    cwd: "/repo",
-    name: "Stored session",
-    updated_at: "2026-01-01T00:00:00.000Z",
-    events: [
-      { type: "user.message", data: { content: "Earlier question" } },
-      { type: "assistant.message", data: { content: "Earlier answer" } },
-    ],
-  });
-
-  const loaded = await adapter.handle("session/load", {
-    sessionId: "stored-session",
-    cwd: "/repo",
-    mcpServers: [],
-  });
-  await adapter.handle("session/prompt", {
-    sessionId: loaded.sessionId,
-    prompt: "continue",
-  });
-
-  assert.equal(loaded.sessionId, "stored-session");
-  assert.equal(loaded.cwd, "/repo");
-  assert.deepEqual(runner.calls[0].options.copilotArgs.slice(-1), ["--resume=stored-session"]);
-  assert.equal(runner.calls[0].options.copilotArgs.includes("--session-id"), false);
-  const replay = notifications
-    .filter((item) => item.params.update._meta?.replay)
-    .map((item) => [item.params.update.sessionUpdate, item.params.update.content.text]);
-  assert.deepEqual(replay, [
-    ["user_message_chunk", "Earlier question"],
-    ["agent_message_chunk", "Earlier answer"],
-  ]);
-});
-
-test("session model and mode changes affect subsequent Copilot args", async () => {
-  const { adapter, runner } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", {});
-
-  await adapter.handle("session/set_model", {
-    sessionId,
-    modelId: "gpt-5.4",
-  });
-  await adapter.handle("session/set_mode", {
-    sessionId,
-    modeId: "plan",
-  });
-  await adapter.handle("session/prompt", {
-    sessionId,
-    prompt: "hello",
-  });
-
-  assert.deepEqual(runner.calls[0].options.copilotArgs, [
-    "--allow-all-tools",
-    "--model",
-    "gpt-5.4",
-    "--mode",
-    "plan",
-    "--session-id",
-    sessionId,
-  ]);
-});
-
-test("session model changes resolve display names to Copilot model ids", async () => {
-  const { adapter, runner } = createAdapter({
-    config: {
-      copilotModels: ["auto", "claude-fable-5", "gpt-5.4"],
-    },
-  });
-  const { sessionId } = await adapter.handle("session/new", {});
-
-  await adapter.handle("session/set_model", {
-    sessionId,
-    modelId: "Claude Fable 5",
-  });
-  await adapter.handle("session/prompt", {
-    sessionId,
-    prompt: "hello",
-  });
-
-  assert.deepEqual(runner.calls[0].options.copilotArgs, [
-    "--allow-all-tools",
-    "--model",
-    "claude-fable-5",
-    "--session-id",
-    sessionId,
-  ]);
-});
-
-test("session/cancel aborts an in-flight Copilot prompt", async () => {
+test("session/cancel aborts an in-flight helper command", async () => {
   const calls = [];
   const runner = {
-    calls,
-    runPrompt(prompt, options) {
-      calls.push({ type: "prompt", prompt, options });
+    runCommand(command, args, options) {
+      calls.push({ command, args, options });
       return new Promise((resolve) => {
         options.signal.addEventListener("abort", () => {
-          resolve({
-            ok: false,
-            aborted: true,
-            exitCode: null,
-            signal: "SIGTERM",
-            stdout: "",
-            stderr: "",
-            error: options.signal.reason.message,
-          });
-        });
+          resolve({ ok: false, aborted: true, exitCode: null, signal: "SIGTERM", stdout: "", stderr: "", error: options.signal.reason.message });
+        }, { once: true });
       });
-    },
-    async runCommand() {
-      throw new Error("runCommand should not be called");
     },
   };
   const { adapter } = createAdapter({ runner });
-  const { sessionId } = await adapter.handle("session/new", {});
+  const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "native" });
 
-  const promptResult = adapter.handle("session/prompt", {
-    sessionId,
-    prompt: "do slow work",
-  });
-  assert.equal(calls.length, 1);
+  const promptResult = adapter.handle("session/prompt", { sessionId, prompt: "/diff" });
+  assert.equal(calls.length, 1, "the operation is registered before any await");
   assert.equal(calls[0].options.signal.aborted, false);
 
-  const cancelResult = await adapter.handle("session/cancel", {
-    sessionId,
-    reason: "User cancelled",
-  });
+  const cancelResult = adapter.cancel({ sessionId, reason: "User cancelled" });
   const result = await promptResult;
 
-  assert.deepEqual(cancelResult, {
-    cancelled: true,
-    count: 1,
-    reason: "User cancelled",
-  });
+  assert.deepEqual(cancelResult, { cancelled: true, count: 1, reason: "User cancelled" });
   assert.equal(calls[0].options.signal.aborted, true);
   assert.equal(result.stopReason, "cancelled");
-  assert.equal(result._meta.aborted, true);
-  assert.equal(result._meta.error, "User cancelled");
 });
 
 test("session/cancel reports no-op when there is no active operation", async () => {
   const { adapter } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", {});
+  const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "native" });
 
-  assert.deepEqual(await adapter.handle("session/cancel", { sessionId }), {
+  assert.deepEqual(adapter.cancel({ sessionId }), {
     cancelled: false,
     count: 0,
     reason: "User cancelled",
@@ -477,9 +310,7 @@ test("session/cancel reports no-op when there is no active operation", async () 
 });
 
 test("native backend mode proxies Copilot-owned slash commands", () => {
-  const { adapter } = createAdapter({
-    config: { copilotBackend: "native-acp" },
-  });
+  const { adapter } = createAdapter();
 
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/add-dir ../logs" }), false);
   assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/allow-all" }), false);
@@ -503,7 +334,7 @@ test("native backend mode proxies Copilot-owned slash commands", () => {
 });
 
 test("a native-advertised command wins over a same-named adapter helper", async () => {
-  const { adapter } = createAdapter({ config: { copilotBackend: "native-acp" } });
+  const { adapter } = createAdapter();
   await adapter.adoptNativeSession({}, { sessionId: "native" });
   assert.equal(adapter.shouldHandleLocally("session/prompt", { sessionId: "native", prompt: "/changelog" }), true,
     "before native discovery the helper still runs locally");
@@ -518,7 +349,7 @@ test("a native-advertised command wins over a same-named adapter helper", async 
 });
 
 test("an adapter helper native doesn't advertise is still handled locally", async () => {
-  const { adapter } = createAdapter({ config: { copilotBackend: "native-acp" } });
+  const { adapter } = createAdapter();
   await adapter.adoptNativeSession({}, { sessionId: "native" });
   adapter.enhanceNativeMessage({ method: "session/update", params: { sessionId: "native", update: {
     sessionUpdate: "available_commands_update", availableCommands: [{ name: "context", description: "Native context" }],
@@ -530,373 +361,29 @@ test("an adapter helper native doesn't advertise is still handled locally", asyn
     "/theme is a terminal color setting with no meaning in an ACP client");
 });
 
-test("prompt fallback keeps new, clear, and memory local", () => {
-  const { adapter } = createAdapter({
-    config: { copilotBackend: "prompt" },
-  });
-
-  assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/new" }), true);
-  assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/clear" }), true);
-  assert.equal(adapter.shouldHandleLocally("session/prompt", { prompt: "/memory" }), true);
-});
-
-test("prompt JSON events are forwarded as agent-shell tool and thought updates", async () => {
-  const runner = {
-    calls: [],
-    async runPrompt(prompt, options) {
-      runner.calls.push({ type: "prompt", prompt, options });
-      for (const event of [
-        {
-          type: "session.auto_mode_resolved",
-          data: { chosenModel: "gpt-5-mini", reasoningBucket: "low" },
-        },
-        {
-          type: "assistant.tool_call_delta",
-          data: {
-            toolCallId: "skill-1",
-            toolName: "skill",
-            toolType: "function",
-            inputDelta: "{\"skill\":\"test-runner\"}",
-          },
-        },
-        {
-          type: "tool.execution_start",
-          data: {
-            toolCallId: "skill-1",
-            toolName: "skill",
-            arguments: { skill: "test-runner" },
-          },
-        },
-        {
-          type: "assistant.tool_call_delta",
-          data: {
-            toolCallId: "task-1",
-            toolName: "task",
-            toolType: "function",
-            inputDelta: "{\"agent_type\":\"adapter-explorer\",\"prompt\":\"Inspect\"}",
-          },
-        },
-        {
-          type: "subagent.started",
-          data: {
-            toolCallId: "task-1",
-            agentName: "adapter-explorer",
-          },
-        },
-        {
-          type: "assistant.tool_call_delta",
-          data: {
-            toolCallId: "call-1",
-            toolName: "bash",
-            toolType: "function",
-            inputDelta: "{\"command\"",
-          },
-        },
-        {
-          type: "assistant.tool_call_delta",
-          data: {
-            toolCallId: "call-1",
-            toolName: "bash",
-            toolType: "function",
-            inputDelta: ":\"pwd\",\"description\":\"Print working directory\"}",
-          },
-        },
-        {
-          type: "assistant.message",
-          data: {
-            messageId: "msg-1",
-            content: "I will inspect the directory.",
-            toolRequests: [
-              {
-                toolCallId: "call-1",
-                name: "bash",
-                arguments: { command: "pwd", description: "Print working directory" },
-                intentionSummary: "Print working directory",
-              },
-            ],
-          },
-        },
-        {
-          type: "tool.execution_partial_result",
-          data: { toolCallId: "call-1", partialOutput: "/repo\n" },
-        },
-        {
-          type: "tool.execution_complete",
-          data: {
-            toolCallId: "call-1",
-            success: true,
-            result: { content: "/repo\n<shellId: 0 completed with exit code 0>" },
-          },
-        },
-        {
-          type: "assistant.message",
-          data: {
-            messageId: "msg-2",
-            content: "Current directory: /repo",
-            toolRequests: [],
-          },
-        },
-        { type: "result", exitCode: 0 },
-      ]) {
-        options.onStdout?.(`${JSON.stringify(event)}\n`);
-      }
-      return { ok: true, exitCode: 0, stdout: "json events should not be rendered", stderr: "" };
-    },
-    async runCommand() {
-      throw new Error("runCommand should not be called");
-    },
-  };
-  const { adapter, notifications } = createAdapter({ runner });
-  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
-
-  const result = await adapter.handle("session/prompt", { sessionId, prompt: "where am I?" });
-  const updates = notifications
-    .filter((notification) => notification.method === "session/update")
-    .map((notification) => notification.params.update);
-
-  assert.equal(result.stopReason, "end_turn");
-  assert.equal(
-    updates.filter(
-      (update) =>
-        update.sessionUpdate === "agent_thought_chunk" &&
-        update.content.text === "Enabling `test-runner` skill.\n",
-    ).length,
-    1,
-  );
-  assert.equal(
-    updates.filter(
-      (update) =>
-        update.sessionUpdate === "agent_thought_chunk" &&
-        update.content.text === "Delegating to `adapter-explorer` subagent.\n",
-    ).length,
-    1,
-  );
-  assert.equal(
-    updates.some(
-      (update) =>
-        update.sessionUpdate === "agent_thought_chunk" &&
-        update.content.text.includes("Auto selected model `gpt-5-mini`"),
-    ),
-    true,
-  );
-  assert.equal(
-    updates.some(
-      (update) =>
-        update.sessionUpdate === "tool_call" &&
-        update.toolCallId === "call-1" &&
-        update.kind === "execute" &&
-        update.rawInput.command === "pwd",
-    ),
-    true,
-  );
-  assert.equal(
-    updates.some(
-      (update) =>
-        update.sessionUpdate === "tool_call_update" &&
-        update.toolCallId === "call-1" &&
-        update.status === "completed" &&
-        update.content[0].content.text.includes("completed with exit code 0"),
-    ),
-    true,
-  );
-  assert.equal(
-    updates.some(
-      (update) =>
-        update.sessionUpdate === "agent_message_chunk" &&
-        update.content.text === "Current directory: /repo",
-    ),
-    true,
-  );
-  assert.equal(
-    updates.some((update) => update.content?.text === "json events should not be rendered"),
-    false,
-  );
-});
-
-test("session config option model changes affect subsequent Copilot args", async () => {
-  const { adapter, runner } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", {});
-
-  const result = await adapter.handle("session/set_config_option", {
-    sessionId,
-    configId: "model",
-    value: "gemini-3.5-flash",
-  });
-  await adapter.handle("session/prompt", {
-    sessionId,
-    prompt: "hello",
-  });
-
-  assert.equal(
-    result.configOptions.find((option) => option.id === "model").currentValue,
-    "gemini-3.5-flash",
-  );
-  assert.deepEqual(runner.calls[0].options.copilotArgs, [
-    "--allow-all-tools",
-    "--model",
-    "gemini-3.5-flash",
-    "--session-id",
-    sessionId,
-  ]);
-});
-
-test("direct Copilot commands use CLI subcommands instead of prompt mode", async () => {
+test("/version and /update run Copilot CLI subcommands", async () => {
   const { adapter, runner, notifications } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
-  await flushSessionUpdates();
-  const result = await adapter.handle("session/prompt", {
-    sessionId,
-    prompt: "/mcp",
-  });
+  const { sessionId } = await adapter.adoptNativeSession({ cwd: "/repo" }, { sessionId: "native" });
+  const result = await adapter.handle("session/prompt", { sessionId, prompt: "/version" });
+  await adapter.handle("session/prompt", { sessionId, prompt: "/update" });
 
   assert.equal(result.stopReason, "end_turn");
-  assert.equal(runner.calls[0].type, "command");
-  assert.deepEqual(runner.calls[0].args, ["mcp", "list"]);
-  assert.equal(runner.calls[0].options.forceTty, false);
-  assert.equal(result._meta.command.name, "/mcp");
   assert.equal(result._meta.handledBy, "copilot-command");
-  assert.equal(
-    notifications.some(
-      (notification) =>
-        notification.method === "session/update" &&
-        notification.params.update.sessionUpdate === "available_commands_update",
-    ),
-    true,
-  );
-  assert.equal(
-    notifications.some(
-      (notification) =>
-        notification.method === "session/update" &&
-        notification.params.update.content?.text === "command: mcp list\n",
-    ),
-    true,
-  );
+  assert.deepEqual(runner.calls.map((call) => call.args), [["--version"], ["update"]]);
+  assert.equal(runner.calls[0].options.cwd, "/repo");
+  assert.equal(notifications.some((item) => item.params.update.content?.text === "command: --version\n"), true);
 });
 
-test("skills list is handled natively from session cwd", async () => {
-  const { adapter, runner, notifications } = createAdapter();
-  const repo = mkdtempSync(join(tmpdir(), "copilot-acp-repo-"));
-  const nested = join(repo, "packages", "app");
-  mkdirSync(join(repo, ".git"));
-  mkdirSync(join(nested, ".github", "skills", "local-skill"), { recursive: true });
-  writeFileSync(
-    join(nested, ".github", "skills", "local-skill", "SKILL.md"),
-    "---\nname: local-skill\ndescription: Local skill\n---\n",
-  );
-
-  const { sessionId } = await adapter.handle("session/new", { cwd: nested });
-  const result = await adapter.handle("session/prompt", {
-    sessionId,
-    prompt: "/skills",
-  });
-
-  assert.equal(result.stopReason, "end_turn");
-  assert.equal(runner.calls.length, 0);
-  assert.equal(result._meta.handledBy, "adapter");
-  assert.equal(
-    notifications.some(
-      (notification) =>
-        notification.method === "session/update" &&
-        notification.params.update.content?.text.includes("local-skill:") &&
-        notification.params.update.content?.text.includes("source: .github/skills/local-skill/SKILL.md"),
-    ),
-    true,
-  );
-});
-
-test("project skills are advertised and forwarded without an unknown-command warning", async () => {
-  const { adapter, runner, notifications } = createAdapter();
-  const repo = mkdtempSync(join(tmpdir(), "copilot-acp-repo-"));
-  mkdirSync(join(repo, ".git"));
-  mkdirSync(join(repo, ".github", "skills", "adapter-smoke-test"), { recursive: true });
-  writeFileSync(
-    join(repo, ".github", "skills", "adapter-smoke-test", "SKILL.md"),
-    "---\nname: adapter-smoke-test\ndescription: Run the adapter smoke test\n---\n",
-  );
-
-  const { sessionId } = await adapter.handle("session/new", { cwd: repo });
-  await flushSessionUpdates();
-  const availableCommands = notifications.find(
-    (notification) =>
-      notification.method === "session/update" &&
-      notification.params.update.sessionUpdate === "available_commands_update",
-  )?.params.update.availableCommands;
-
-  assert.deepEqual(
-    availableCommands.find((command) => command.name === "adapter-smoke-test"),
-    {
-      name: "adapter-smoke-test",
-      description: "Run the adapter smoke test",
-      input: { hint: "optional skill arguments" },
-    },
-  );
-
-  const result = await adapter.handle("session/prompt", {
-    sessionId,
-    prompt: "/adapter-smoke-test hello",
-  });
-
-  assert.equal(result.stopReason, "end_turn");
-  assert.equal(runner.calls[0].type, "prompt");
-  assert.match(runner.calls[0].prompt, /Execute the GitHub Copilot project skill \/adapter-smoke-test\./);
-  assert.match(runner.calls[0].prompt, /Invocation arguments: hello/);
-  assert.match(runner.calls[0].prompt, /Run the adapter smoke test/);
-  assert.equal(
-    notifications.some((notification) =>
-      notification.params.update.content?.text?.includes("Unknown slash command /adapter-smoke-test"),
-    ),
-    false,
-  );
-});
-
-test("skills management subcommands still use Copilot CLI", async () => {
-  const { adapter, runner } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
-  const result = await adapter.handle("session/prompt", {
-    sessionId,
-    prompt: "/skills add ./my-skill",
-  });
-
-  assert.equal(result.stopReason, "end_turn");
-  assert.equal(runner.calls[0].type, "command");
-  assert.deepEqual(runner.calls[0].args, ["skill", "add", "./my-skill"]);
-  assert.equal(result._meta.handledBy, "copilot-command");
-});
-
-test("agent workflow slash commands still pass through prompt mode", async () => {
-  const { adapter, runner } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
-  const result = await adapter.handle("session/prompt", {
-    sessionId,
-    prompt: "/review",
-  });
-
-  assert.equal(result.stopReason, "end_turn");
-  assert.equal(runner.calls[0].type, "prompt");
-  assert.equal(runner.calls[0].prompt, "/review");
-  assert.equal(result._meta.command.name, "/review");
-});
-
-test("non-model session commands are handled without prompt mode", async () => {
-  const { adapter, runner } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
-
-  await adapter.handle("session/prompt", { sessionId, prompt: "/agent explore" });
-  await adapter.handle("session/prompt", { sessionId, prompt: "/experimental on" });
-  await adapter.handle("session/prompt", { sessionId, prompt: "/memory off" });
-  await adapter.handle("session/prompt", { sessionId, prompt: "/keep-alive busy" });
-  await adapter.handle("session/prompt", { sessionId, prompt: "/limits set max-ai-credits 30" });
-  await adapter.handle("session/prompt", { sessionId, prompt: "hello" });
-
-  assert.equal(runner.calls.filter((call) => call.type === "prompt").length, 1);
-  assert.deepEqual(runner.calls.at(-1).options.copilotArgs.slice(-6, -2), [
-    "--agent", "explore", "--max-ai-credits", "30",
-  ]);
+test("prompts that are not adapter slash commands are rejected locally", async () => {
+  const { adapter } = createAdapter();
+  const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "native" });
+  assert.equal(adapter.shouldHandleLocally("session/prompt", { sessionId, prompt: "hello" }), false);
+  await assert.rejects(adapter.handle("session/prompt", { sessionId, prompt: "hello" }), { code: -32602 });
 });
 
 test("diff runs git directly instead of asking the model", async () => {
   const { adapter, runner } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+  const { sessionId } = await adapter.adoptNativeSession({ cwd: "/repo" }, { sessionId: "native" });
   const result = await adapter.handle("session/prompt", { sessionId, prompt: "/diff" });
 
   assert.equal(result._meta.handledBy, "adapter");
@@ -905,38 +392,9 @@ test("diff runs git directly instead of asking the model", async () => {
   assert.deepEqual(runner.calls[0].args, ["--no-pager", "diff", "--no-ext-diff", "HEAD", "--"]);
 });
 
-test("context and usage read the latest persisted Copilot metrics", async () => {
-  const { adapter, runner, notifications, sessionStateDir } = createAdapter();
-  writeStoredWorkspace(sessionStateDir, "usage-session", {
-    cwd: "/repo",
-    updated_at: "2026-01-01T00:00:00.000Z",
-    events: [{
-      type: "session.shutdown",
-      data: {
-        currentModel: "gpt-5.4",
-        currentTokens: 123,
-        systemTokens: 10,
-        conversationTokens: 20,
-        toolDefinitionsTokens: 93,
-        totalPremiumRequests: 2,
-        totalApiDurationMs: 500,
-        tokenDetails: { input: { tokenCount: 100 }, output: { tokenCount: 23 } },
-      },
-    }],
-  });
-  await adapter.handle("session/load", { sessionId: "usage-session", cwd: "/repo" });
-  await adapter.handle("session/prompt", { sessionId: "usage-session", prompt: "/context" });
-  await adapter.handle("session/prompt", { sessionId: "usage-session", prompt: "/usage" });
-
-  assert.equal(runner.calls.length, 0);
-  const text = notifications.map((item) => item.params.update.content?.text || "").join("\n");
-  assert.match(text, /Context tokens: 123/);
-  assert.match(text, /Premium requests: 2/);
-});
-
 test("subagents command is handled natively instead of prompt mode", async () => {
   const { adapter, runner, notifications } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+  const { sessionId } = await adapter.adoptNativeSession({ cwd: "/repo" }, { sessionId: "native" });
   const result = await adapter.handle("session/prompt", {
     sessionId,
     prompt: "/subagents",
@@ -957,7 +415,7 @@ test("subagents command is handled natively instead of prompt mode", async () =>
 
 test("subagents command writes Copilot settings shape", async () => {
   const { adapter, runner, settingsPath } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+  const { sessionId } = await adapter.adoptNativeSession({ cwd: "/repo" }, { sessionId: "native" });
   const result = await adapter.handle("session/prompt", {
     sessionId,
     prompt: "/subagents set explore claude-sonnet-5 high long_context",
@@ -990,7 +448,7 @@ test("subagents command lists project agents from git root", async () => {
     "---\nname: explore\ndescription: Explore the codebase\n---\n",
   );
 
-  const { sessionId } = await adapter.handle("session/new", { cwd: nested });
+  const { sessionId } = await adapter.adoptNativeSession({ cwd: nested }, { sessionId: "native" });
   const result = await adapter.handle("session/prompt", {
     sessionId,
     prompt: "/subagents",
@@ -1019,7 +477,7 @@ test("subagents command prefers cwd agents over git root agents", async () => {
   writeFileSync(join(repo, ".github", "agents", "root-agent.md"), "description: Root agent\n");
   writeFileSync(join(nested, ".github", "agents", "local-agent.md"), "description: Local agent\n");
 
-  const { sessionId } = await adapter.handle("session/new", { cwd: nested });
+  const { sessionId } = await adapter.adoptNativeSession({ cwd: nested }, { sessionId: "native" });
   const result = await adapter.handle("session/prompt", {
     sessionId,
     prompt: "/subagents",
@@ -1040,7 +498,7 @@ test("subagents command shows project agent detail without settings", async () =
   mkdirSync(join(repo, ".github", "agents"), { recursive: true });
   writeFileSync(join(repo, ".github", "agents", "code-review.md"), "description: Review code changes\n");
 
-  const { sessionId } = await adapter.handle("session/new", { cwd: repo });
+  const { sessionId } = await adapter.adoptNativeSession({ cwd: repo }, { sessionId: "native" });
   const result = await adapter.handle("session/prompt", {
     sessionId,
     prompt: "/subagents code-review",
@@ -1060,7 +518,7 @@ test("subagents command shows project agent detail without settings", async () =
 
 test("settings subagent bridge can unset a configured agent", async () => {
   const { adapter, settingsPath } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
+  const { sessionId } = await adapter.adoptNativeSession({ cwd: "/repo" }, { sessionId: "native" });
 
   await adapter.handle("session/prompt", {
     sessionId,
@@ -1074,58 +532,23 @@ test("settings subagent bridge can unset a configured agent", async () => {
   assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {});
 });
 
-test("native directory commands update session prompt args", async () => {
-  const { adapter, runner, notifications } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
-
-  await adapter.handle("session/prompt", { sessionId, prompt: "/cwd src" });
-  await adapter.handle("session/prompt", { sessionId, prompt: "/add-dir ../shared" });
-  await adapter.handle("session/prompt", { sessionId, prompt: "hello" });
-
-  assert.equal(runner.calls[0].options.cwd, "/repo/src");
-  assert.deepEqual(runner.calls[0].options.copilotArgs.slice(-4), [
-    "--add-dir",
-    "/repo/shared",
-    "--session-id",
-    sessionId,
-  ]);
-  assert.equal(
-    notifications.some(
-      (notification) =>
-        notification.method === "session/update" &&
-        notification.params.update.content?.text.includes("Working directory set to /repo/src"),
-    ),
-    true,
-  );
-});
-
-test("resume command uses Copilot resume flag for subsequent prompts", async () => {
+test("login api-key stores the token for the session and the relaunched backend", async () => {
   const { adapter, runner } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", { cwd: "/repo" });
-
-  await adapter.handle("session/prompt", { sessionId, prompt: "/resume existing-session" });
-  await adapter.handle("session/prompt", { sessionId, prompt: "hello" });
-
-  assert.deepEqual(runner.calls[0].options.copilotArgs.slice(-1), ["--resume=existing-session"]);
-  assert.equal(runner.calls[0].options.copilotArgs.includes("--session-id"), false);
-});
-
-test("login api-key stores env in the session", async () => {
-  const { adapter, runner } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", {});
+  const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "native" });
   const result = await adapter.handle("session/prompt", {
     sessionId,
     prompt: "/login api-key test-token",
   });
 
   assert.equal(result.stopReason, "end_turn");
-  await adapter.handle("session/prompt", { sessionId, prompt: "hello" });
-  assert.equal(runner.calls[0].options.env.COPILOT_GITHUB_TOKEN, "test-token");
+  assert.equal(runner.calls.length, 0);
+  assert.equal(adapter.globalEnv.COPILOT_GITHUB_TOKEN, "test-token");
+  assert.equal(adapter.sessions.get(sessionId).env.GH_TOKEN, "test-token");
 });
 
 test("login github streams device-flow output to the session", async () => {
   const { adapter, notifications } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", {});
+  const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "native" });
   const result = await adapter.handle("session/prompt", {
     sessionId,
     prompt: "/login github",
@@ -1144,7 +567,7 @@ test("login github streams device-flow output to the session", async () => {
 
 test("bare login shows choices instead of assuming GitHub.com", async () => {
   const { adapter, runner, notifications } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", {});
+  const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "native" });
   const result = await adapter.handle("session/prompt", {
     sessionId,
     prompt: "/login",
@@ -1196,7 +619,7 @@ test("/login api-key restarts the native backend with the new credentials", asyn
       return true;
     },
   });
-  const { sessionId } = await adapter.handle("session/new", {});
+  const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "native" });
 
   const result = await adapter.handle("session/prompt", {
     sessionId,
@@ -1220,7 +643,7 @@ test("/login api-key reports a failed backend restart instead of claiming succes
       throw new Error("mkfifo failed");
     },
   });
-  const { sessionId } = await adapter.handle("session/new", {});
+  const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "native" });
 
   const result = await adapter.handle("session/prompt", {
     sessionId,
@@ -1233,7 +656,7 @@ test("/login api-key reports a failed backend restart instead of claiming succes
 
 test("/login rejects a typo instead of treating it as a hostname", async () => {
   const { adapter, runner } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", {});
+  const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "native" });
 
   const result = await adapter.handle("session/prompt", { sessionId, prompt: "/login gihub" });
 
@@ -1247,7 +670,7 @@ test("/login rejects a typo instead of treating it as a hostname", async () => {
 
 test("/login accepts a bare hostname", async () => {
   const { adapter, runner } = createAdapter();
-  const { sessionId } = await adapter.handle("session/new", {});
+  const { sessionId } = await adapter.adoptNativeSession({}, { sessionId: "native" });
 
   await adapter.handle("session/prompt", { sessionId, prompt: "/login ghe.example.com" });
 
