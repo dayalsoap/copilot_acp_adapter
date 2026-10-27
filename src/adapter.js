@@ -13,7 +13,6 @@ import {
   parseCommandArgs,
   parseSlashCommand,
 } from "./commands.js";
-import { listConfiguredModels, modelDisplayName } from "./models.js";
 import { discoverProjectAgents } from "./project-agents.js";
 import {
   getSetting,
@@ -158,16 +157,7 @@ export class CopilotAcpAdapter {
       modelId:
         nativeResult.models?.currentModelId ||
         configOptionCurrentValue(nativeResult.configOptions, "model") ||
-        this.config.copilotModel ||
         "auto",
-      modeId: normalizeModeId(
-        nativeResult.modes?.currentModeId ||
-        configOptionCurrentValue(nativeResult.configOptions, "mode") ||
-        this.config.copilotMode ||
-        "agent",
-      ),
-      nativeModeIds: { ...nativeModeIds(nativeResult.modes), ...modeIdsFromConfigOptions(nativeResult.configOptions) },
-      nativeModeConfigIds: nativeModeConfigIds(nativeResult.configOptions),
       nativeConfigOptions: nativeResult.configOptions,
     };
     this.sessions.set(sessionId, session);
@@ -181,11 +171,7 @@ export class CopilotAcpAdapter {
       cwd: cwd || this.config.cwd,
       env: {},
       modelId: "auto",
-      modeId: "agent",
-      nativeModeIds: {},
-      nativeModeConfigIds: ["mode"],
       copilotSessionId: sessionId,
-      allowAll: false,
     };
   }
 
@@ -293,16 +279,13 @@ export class CopilotAcpAdapter {
     }
   }
 
-  async enhanceSessionStartResult(session, nativeResult = {}) {
-    const models = nativeResult.models || modelsFromConfigOptions(nativeResult.configOptions) ||
-      await sessionModels(session, this.config);
+  // Native sends models, modes and configOptions itself (verified on 1.0.104),
+  // and agent-shell's header reads them as they are.
+  enhanceSessionStartResult(session, nativeResult = {}) {
     return {
       ...nativeResult,
       sessionId: session.id,
       cwd: nativeResult.cwd || session.cwd,
-      models,
-      modes: nativeResult.modes || modesFromConfigOptions(nativeResult.configOptions) || sessionModes(session),
-      configOptions: nativeResult.configOptions ?? sessionConfigOptions(session, models),
     };
   }
 
@@ -313,13 +296,7 @@ export class CopilotAcpAdapter {
     const session = this.sessions.get(sessionId);
     if (session && update?.sessionUpdate === "config_option_update") {
       session.nativeConfigOptions = update.configOptions;
-      session.nativeModeConfigIds = nativeModeConfigIds(update.configOptions);
       session.modelId = configOptionCurrentValue(update.configOptions, "model") || session.modelId;
-      session.modeId = normalizeModeId(configOptionCurrentValue(update.configOptions, "mode") || session.modeId);
-      session.nativeModeIds = { ...session.nativeModeIds, ...modeIdsFromConfigOptions(update.configOptions) };
-    }
-    if (session && update?.sessionUpdate === "current_mode_update") {
-      session.modeId = normalizeModeId(update.currentModeId);
     }
     if (session && update?.sessionUpdate === "current_model_update") {
       session.modelId = update.currentModelId || session.modelId;
@@ -401,7 +378,7 @@ export class CopilotAcpAdapter {
 
   beginModelReport(sessionId, prompt) {
     const session = this.sessions.get(sessionId);
-    const models = modelsFromConfigOptions(session?.nativeConfigOptions)?.availableModels.map((model) => model.modelId) || this.config.copilotModels || [];
+    const models = modelIdsFromConfigOptions(session?.nativeConfigOptions);
     const mentioned = mentionedModels(prompt, models);
     const report = {
       sessionId, session, mentionedModels: mentioned,
@@ -840,20 +817,6 @@ export class CopilotAcpAdapter {
     };
   }
 
-  nativeModeId(sessionId, modeId) {
-    const normalized = normalizeModeId(modeId);
-    return this.sessions.get(sessionId)?.nativeModeIds?.[normalized] || modeId;
-  }
-
-  nativeModeIdFromConfigOption(sessionId, configId, value) {
-    if (this.sessions.get(sessionId)?.nativeConfigOptions?.some((option) => option.id === configId)) return null;
-    const session = this.sessions.get(sessionId);
-    if (!session?.nativeModeConfigIds?.includes(configId)) {
-      return null;
-    }
-    return this.nativeModeId(sessionId, configOptionValue(value));
-  }
-
   async authenticate(params = {}) {
     const login = loginFromMethodId(params.methodId, this.config);
     const plan = buildGithubLoginCommand(login, this.config);
@@ -1122,13 +1085,11 @@ function mergeAuthMethods(nativeMethods = [], localMethods = []) {
   return result;
 }
 
-function modelsFromConfigOptions(configOptions = []) {
+function modelIdsFromConfigOptions(configOptions = []) {
   const option = (configOptions || []).find((entry) => entry?.category === "model" || entry?.id === "model");
-  if (!option) return null;
-  const flatten = (options = []) => options.flatMap((entry) => entry.options ? flatten(entry.options) : [{
-    modelId: entry.value, name: entry.name, description: entry.description, ...(entry._meta ? { _meta: entry._meta } : {}),
-  }]);
-  return { currentModelId: option.currentValue, availableModels: flatten(option.options) };
+  // Options may be grouped; only leaves carry a model id.
+  const flatten = (options = []) => options.flatMap((entry) => entry.options ? flatten(entry.options) : [entry.value]);
+  return option ? flatten(option.options) : [];
 }
 
 function nativeCommandHelpText(commands, rawArgs) {
@@ -1257,158 +1218,6 @@ function isSupportedAdapterSetting(key) {
 
 function isValidSubagentName(agentName) {
   return /^[A-Za-z0-9_-]+$/.test(String(agentName || ""));
-}
-
-async function sessionModels(session, config) {
-  const currentModelId = session.modelId || "auto";
-  const modelIds = [...(await listConfiguredModels(config))];
-  if (!modelIds.includes(currentModelId)) {
-    modelIds.unshift(currentModelId);
-  }
-
-  return {
-    currentModelId,
-    availableModels: modelIds.map((modelId) => ({
-      modelId,
-      name:
-        modelId === currentModelId && config.copilotModelName
-          ? config.copilotModelName
-          : modelDisplayName(modelId),
-      description:
-        modelId === "auto"
-          ? "Copilot chooses the model automatically"
-          : "Copilot CLI model",
-    })),
-  };
-}
-
-function sessionConfigOptions(session, models) {
-  const modes = sessionModes(session);
-  return [
-    {
-      type: "select",
-      id: "model",
-      name: "Model",
-      currentValue: models.currentModelId,
-      options: models.availableModels.map((model) => ({
-        value: model.modelId,
-        name: model.name,
-        description: model.description,
-      })),
-      category: "model",
-      description: "Controls which Copilot model is used for subsequent prompts.",
-    },
-    {
-      type: "select",
-      id: "mode",
-      name: "Mode",
-      currentValue: modes.currentModeId,
-      options: modes.availableModes.map((mode) => ({
-        value: mode.id,
-        name: mode.name,
-        description: mode.description,
-      })),
-      category: "mode",
-      description: "Controls how Copilot responds in this session.",
-    },
-    {
-      type: "select",
-      id: "allow_all",
-      name: "Allow All",
-      currentValue: session.allowAll ? "on" : "off",
-      options: [
-        {
-          value: "on",
-          name: "On",
-          description: "Automatically approve all tool, path, and URL requests for this adapter session",
-        },
-        {
-          value: "off",
-          name: "Off",
-          description: "Use the permissions configured by Copilot CLI and COPILOT_ARGS",
-        },
-      ],
-      category: "permissions",
-      description: "Controls the adapter-level allow-all override for subsequent prompts.",
-    },
-  ];
-}
-
-function sessionModes(session) {
-  return {
-    currentModeId: session.modeId || "agent",
-    availableModes: [
-      {
-        id: "agent",
-        name: "Agent",
-        description: "Default Copilot agent mode",
-      },
-      {
-        id: "plan",
-        name: "Plan",
-        description: "Plan before making changes",
-      },
-      {
-        id: "autopilot",
-        name: "Autopilot",
-        description: "Continue autonomously where possible",
-      },
-    ],
-  };
-}
-
-function nativeModeIds(modes = {}) {
-  return Object.fromEntries(
-    (modes?.availableModes || [])
-      .filter((mode) => mode?.id)
-      .map((mode) => [normalizeModeId(mode.id), mode.id]),
-  );
-}
-
-function modeIdsFromConfigOptions(configOptions = []) {
-  return Object.fromEntries((configOptions || [])
-    .filter((option) => option.category === "mode")
-    .flatMap((option) => (option.options || []).map((entry) => [normalizeModeId(entry.value), entry.value])));
-}
-
-function modesFromConfigOptions(configOptions = []) {
-  const option = (configOptions || []).find((entry) => entry?.category === "mode");
-  if (!option) return null;
-  return { currentModeId: option.currentValue,
-    availableModes: (option.options || []).map((entry) => ({ id: entry.value, name: entry.name, description: entry.description })) };
-}
-
-function nativeModeConfigIds(configOptions = []) {
-  return [
-    "mode",
-    ...(configOptions || [])
-      .filter((option) => option?.category === "mode")
-      .map((option) => option.id)
-      .filter(Boolean),
-  ];
-}
-
-function configOptionValue(value) {
-  if (value && typeof value === "object") {
-    return value.value ?? value.currentValue ?? value.id ?? "";
-  }
-  return value;
-}
-
-function normalizeModeId(modeId) {
-  if (String(modeId || "").endsWith("#agent")) {
-    return "agent";
-  }
-  if (String(modeId || "").endsWith("#plan")) {
-    return "plan";
-  }
-  if (String(modeId || "").endsWith("#autopilot")) {
-    return "autopilot";
-  }
-  if (modeId === "interactive" || !modeId) {
-    return "agent";
-  }
-  return modeId;
 }
 
 function totalTrackedSubagents(startsBySession) {

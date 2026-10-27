@@ -182,47 +182,11 @@ async function proxyRequest({ adapter, nativeBackend, getNativeInitialize, conne
     return;
   }
 
-  // Gate on the method: keying off a bare `params.id` rewrote unrelated requests
-  // into session/set_mode.
-  const configModeId = isSetConfigOption(message.method)
-    ? adapter.nativeModeIdFromConfigOption(
-        message.params?.sessionId,
-        message.params?.configId || message.params?.id,
-        message.params?.value,
-      )
-    : null;
-  if (configModeId !== null) {
-    nativeBackend.forwardClientMessage(nativeConfigModeMessage(message, configModeId));
+  const rewritten = await rewriteChangelogSummary(adapter, connection, message);
+  if (!rewritten) {
     return;
   }
-
-  const autopilotModeMessage = nativeAutopilotModeMessage(
-    message,
-    adapter.nativeModeId(message.params?.sessionId, "autopilot"),
-  );
-  if (autopilotModeMessage && !adapter.nativeCommands.get(message.params?.sessionId)?.some((command) => command.name === "autopilot")) {
-    nativeBackend.forwardClientMessage(autopilotModeMessage, (response) => {
-      if (response.error) {
-        return response;
-      }
-      return {
-        ...response,
-        result: {
-          stopReason: "end_turn",
-          _meta: {
-            command: "/autopilot",
-            handledBy: "native-acp-mode",
-          },
-        },
-      };
-    });
-    return;
-  }
-
-  const nativeMessage = normalizeNativeMessage(await rewriteChangelogSummary(adapter, connection, message));
-  if (!nativeMessage) {
-    return;
-  }
+  const nativeMessage = normalizeNativeMessage(rewritten);
   // The user's own text, so release notes in a rewritten /changelog summary
   // can't trigger a model report.
   const report = nativeMessage.method === "session/prompt"
@@ -265,41 +229,6 @@ export async function enhanceNativePromptResponse(adapter, nativeMessage, respon
     await adapter.finishModelReport?.(report, response);
   }
   return response;
-}
-
-export function isSetConfigOption(method) {
-  return method === "session/set_config_option" || method === "setConfigOption";
-}
-
-export function nativeConfigModeMessage(message, modeId) {
-  return {
-    ...message,
-    method: "session/set_mode",
-    params: {
-      sessionId: message.params?.sessionId,
-      modeId,
-    },
-  };
-}
-
-export function nativeAutopilotModeMessage(message, modeId = "autopilot") {
-  if (message.method !== "session/prompt" && message.method !== "prompt") {
-    return null;
-  }
-
-  const promptText = nativePromptText(message.params || {});
-  if (promptText === null || promptText.trim() !== "/autopilot") {
-    return null;
-  }
-
-  return {
-    ...message,
-    method: "session/set_mode",
-    params: {
-      sessionId: message.params?.sessionId,
-      modeId,
-    },
-  };
 }
 
 export function normalizeNativeMessage(message) {

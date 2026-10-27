@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   enhanceNativePromptResponse,
-  nativeAutopilotModeMessage,
-  nativeConfigModeMessage,
   normalizeNativeMessage,
   rewriteChangelogSummary,
 } from "../src/server.js";
@@ -42,60 +40,6 @@ test("native prompt proxy normalizes string shorthand to ACP content blocks", ()
   );
 });
 
-test("bare /autopilot uses the native ACP mode-change method", () => {
-  assert.deepEqual(
-    nativeAutopilotModeMessage({
-      jsonrpc: "2.0",
-      id: 2,
-      method: "session/prompt",
-      params: {
-        sessionId: "s1",
-        prompt: [{ type: "text", text: "  /autopilot  " }],
-      },
-    }, "copilot#autopilot"),
-    {
-      jsonrpc: "2.0",
-      id: 2,
-      method: "session/set_mode",
-      params: {
-        sessionId: "s1",
-        modeId: "copilot#autopilot",
-      },
-    },
-  );
-});
-
-test("agent-shell mode config requests use the native ACP mode-change method", () => {
-  assert.deepEqual(
-    nativeConfigModeMessage({
-      jsonrpc: "2.0",
-      id: 3,
-      method: "session/set_config_option",
-      params: {
-        sessionId: "s1",
-        configId: "mode",
-        value: "autopilot",
-      },
-    }, "copilot#autopilot"),
-    {
-      jsonrpc: "2.0",
-      id: 3,
-      method: "session/set_mode",
-      params: {
-        sessionId: "s1",
-        modeId: "copilot#autopilot",
-      },
-    },
-  );
-});
-
-test("autopilot commands with arguments remain native slash commands", () => {
-  assert.equal(nativeAutopilotModeMessage({
-    method: "session/prompt",
-    params: { sessionId: "s1", prompt: "/autopilot off" },
-  }), null);
-});
-
 test("changelog summarize is forwarded to native as a prompt, and fetch failures are answered locally", async () => {
   const sent = [];
   const connection = { send(message) { sent.push(message); } };
@@ -107,7 +51,7 @@ test("changelog summarize is forwarded to native as a prompt, and fetch failures
     fetchImpl: async () => (markdown ? { ok: true, text: async () => markdown } : { ok: false, status: 503 }),
     notify(method, params) { updates.push(params); },
   });
-  await adapter.adoptNativeSession({}, { sessionId: "s1", models: { currentModelId: "auto", availableModels: [] } });
+  await adapter.adoptNativeSession({}, { sessionId: "s1" });
 
   const plain = { jsonrpc: "2.0", id: 1, method: "session/prompt", params: { sessionId: "s1", prompt: "hello" } };
   assert.equal(await rewriteChangelogSummary(adapter, connection, plain), plain);

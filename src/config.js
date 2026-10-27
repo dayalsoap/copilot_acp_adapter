@@ -2,22 +2,13 @@ import { cwd } from "node:process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parseModelCatalog } from "./models.js";
 
 export function loadConfig(env = process.env) {
-  const copilotModelsOverride = Boolean(env.COPILOT_MODELS);
-
   return {
     copilotCommand: env.COPILOT_COMMAND || defaultCopilotCommand(),
     copilotAcpArgs: parseArgs(env.COPILOT_ACP_ARGS || "--acp --no-color"),
     copilotAcpTransport: env.COPILOT_ACP_TRANSPORT || "fifo",
     copilotAcpRequestTimeoutMs: Number(env.COPILOT_ACP_REQUEST_TIMEOUT_MS || 15000),
-    copilotModel: env.COPILOT_MODEL || "auto",
-    copilotModelName: env.COPILOT_MODEL_NAME || "",
-    copilotModels: copilotModelsOverride ? parseModelCatalog(env.COPILOT_MODELS) : ["auto"],
-    copilotModelsOverride,
-    modelDiscoveryTimeoutMs: Number(env.COPILOT_MODEL_DISCOVERY_TIMEOUT_MS || 3000),
-    copilotMode: env.COPILOT_MODE || "agent",
     cwd: env.COPILOT_CWD || cwd(),
     githubHost: normalizeHost(env.GITHUB_HOST || "https://github.com"),
     enterpriseHost: env.GITHUB_ENTERPRISE_HOST || env.GHE_HOST || "",

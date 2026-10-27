@@ -15,8 +15,7 @@ async function fixture(t, options = {}) {
   writeFileSync(journal, `${JSON.stringify({ type: "model.call_start", data: { model: "old-history-model" } })}\n`);
   const updates = [];
   const adapter = new CopilotAcpAdapter({
-    config: { cwd: root, copilotSessionStatePath: root,
-      copilotModelsOverride: true, copilotModels: ["gpt-5.6-terra", "gpt-5.6-luna"], copilotModel: "gpt-5.6-terra", ...options.config },
+    config: { cwd: root, copilotSessionStatePath: root, ...options.config },
     runner: options.runner || {},
     notify(method, params) { updates.push({ method, params }); },
   });

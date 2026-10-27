@@ -34,11 +34,6 @@ function createAdapter(options = {}) {
     config: {
       cwd: "/tmp",
       copilotCommand: "/home/jai/.local/bin/copilot",
-      copilotModel: "claude-sonnet-5",
-      copilotModelName: "Claude Sonnet 5",
-      copilotModels: ["auto", "claude-sonnet-5", "gpt-5.4", "gemini-3.5-flash"],
-      copilotModelsOverride: true,
-      copilotMode: "agent",
       githubHost: "https://github.com",
       enterpriseHost: "",
       apiKey: "",
@@ -113,43 +108,6 @@ test("initialize keeps native capabilities and adds adapter auth methods", () =>
   assert.equal(result.authMethods.some((method) => method.id === "api-key"), true);
 });
 
-test("adopted native sessions retain Copilot's autopilot mode id", async () => {
-  const { adapter } = createAdapter();
-  await adapter.adoptNativeSession({}, {
-    sessionId: "native-session",
-    modes: {
-      currentModeId: "copilot#agent",
-      availableModes: [
-        { id: "copilot#agent", name: "Agent" },
-        { id: "copilot#autopilot", name: "Autopilot" },
-      ],
-    },
-  });
-
-  assert.equal(adapter.nativeModeId("native-session", "autopilot"), "copilot#autopilot");
-  assert.equal(
-    adapter.nativeModeIdFromConfigOption("native-session", "mode", "autopilot"),
-    "copilot#autopilot",
-  );
-});
-
-test("native mode config option ids remain native config requests", async () => {
-  const { adapter } = createAdapter();
-  await adapter.adoptNativeSession({}, {
-    sessionId: "native-session",
-    configOptions: [{ id: "copilot-mode", category: "mode", currentValue: "agent" }],
-  });
-
-  assert.equal(
-    adapter.nativeModeIdFromConfigOption("native-session", "copilot-mode", "plan"),
-    null,
-  );
-  assert.equal(
-    adapter.nativeModeIdFromConfigOption("native-session", "model", "gpt-5.4"),
-    null,
-  );
-});
-
 test("native command snapshots retain helpers without inventing commands or skills", async () => {
   const { adapter, notifications } = createAdapter();
   const repo = mkdtempSync(join(tmpdir(), "copilot-acp-native-commands-"));
@@ -196,15 +154,25 @@ test("native command snapshots retain helpers without inventing commands or skil
   assert.equal(refreshed.params.update.availableCommands.some((command) => command.name === "enabled-skill"), false);
 });
 
-test("native metadata is authoritative and config-only models avoid discovery", async () => {
-  const { adapter } = createAdapter({ config: { copilotModelsOverride: false } });
+test("native session metadata passes through untouched", async () => {
+  const { adapter } = createAdapter();
   const configOptions = [{ id: "native-model", category: "model", currentValue: "permitted", options: [
     { name: "Allowed", options: [{ value: "permitted", name: "Permitted", _meta: { multiplier: 2 } }] },
   ] }];
-  const result = await adapter.adoptNativeSession({ cwd: "/loaded" }, { sessionId: "native", configOptions });
+  const models = { currentModelId: "permitted", availableModels: [{ modelId: "permitted", name: "Permitted" }] };
+  const modes = { currentModeId: "native#agent", availableModes: [{ id: "native#agent", name: "Agent" }] };
+  const result = await adapter.adoptNativeSession({ cwd: "/loaded" }, { sessionId: "native", configOptions, models, modes });
   assert.equal(result.configOptions, configOptions);
-  assert.deepEqual(result.models.availableModels, [{ modelId: "permitted", name: "Permitted", description: undefined, _meta: { multiplier: 2 } }]);
+  assert.equal(result.models, models);
+  assert.equal(result.modes, modes);
+  assert.equal(adapter.sessions.get("native").modelId, "permitted");
   assert.equal(adapter.sessions.get("native").cwd, "/loaded");
+
+  // Without native models the adapter no longer synthesizes or discovers any.
+  const bare = await adapter.adoptNativeSession({}, { sessionId: "bare", configOptions });
+  assert.equal(bare.models, undefined);
+  assert.equal(bare.modes, undefined);
+  assert.equal(adapter.sessions.get("bare").modelId, "permitted");
 });
 
 test("native simple settings use CLI validation and preserve complex setting bridge", async () => {

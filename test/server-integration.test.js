@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { test } from "node:test";
@@ -40,7 +41,9 @@ test("proxy preserves negotiation, native metadata, permissions, load and close 
         writeFileSync(stateRoot+"/"+sessionId+"/events.jsonl",JSON.stringify({type:"model.call_start",data:{model:"old-history-model"}})+"\\n");
         update(sessionId,{sessionUpdate:"available_commands_update",availableCommands:[{name:"context",description:"Native context"},{name:"enabled-skill",description:"Enabled skill"},{name:"autopilot",description:"Native autopilot"}]});
         if (m.method==="session/load") update(sessionId,{sessionUpdate:"user_message_chunk",content:{type:"text",text:"history"}});
-        reply({...(m.method==="session/new" ? {sessionId} : {}),configOptions});
+        reply({...(m.method==="session/new" ? {sessionId} : {}),configOptions,
+          models:{currentModelId:"allowed",availableModels:[{modelId:"allowed",name:"Allowed"}]},
+          modes:{currentModeId:"native#agent",availableModes:[{id:"native#agent",name:"Agent"},{id:"native#plan",name:"Plan"}]}});
       }
       else if (m.method==="session/set_config_option") reply({configOptions});
       else if (m.method==="session/prompt") {
@@ -59,12 +62,19 @@ test("proxy preserves negotiation, native metadata, permissions, load and close 
       else if (m.id!==undefined) reply({});
     });
   `);
+  let changelogStatus = 503;
+  const changelogServer = createServer((_request, response) => {
+    response.writeHead(changelogStatus).end("# Changelog\n\n## 1.0.104\n\nNative notes.\n");
+  });
+  await new Promise((resolve) => changelogServer.listen(0, "127.0.0.1", resolve));
+  t.after(() => changelogServer.close());
   const child = spawn(process.execPath, ["bin/copilot-acp-adapter.js"], {
     cwd: new URL("..", import.meta.url),
     env: { ...process.env, COPILOT_COMMAND: process.execPath,
       COPILOT_GITHUB_TOKEN: "fake-test-token",
       COPILOT_SESSION_STATE_PATH: join(root, "state"),
-      COPILOT_ACP_ARGS: JSON.stringify([peerPath]), COPILOT_ACP_TRANSPORT: "stdio", COPILOT_CWD: root },
+      COPILOT_ACP_ARGS: JSON.stringify([peerPath]), COPILOT_ACP_TRANSPORT: "stdio", COPILOT_CWD: root,
+      COPILOT_CHANGELOG_URL: `http://127.0.0.1:${changelogServer.address().port}/changelog.md` },
     stdio: ["pipe", "pipe", "pipe"],
   });
   t.after(() => { child.kill(); rmSync(root, { recursive: true, force: true }); });
@@ -112,6 +122,9 @@ test("proxy preserves negotiation, native metadata, permissions, load and close 
   assert.deepEqual(modelReport._meta.skills, ["test-runner"]);
   assert.deepEqual(modelReport._meta.delegations, []);
   assert.equal((await request("session/prompt", { sessionId: session.sessionId, text: "approve" })).permission.outcome.optionId, "once");
+  assert.equal((await request("session/prompt", { sessionId: session.sessionId, text: "/changelog summarize" })).stopReason, "error");
+  changelogStatus = 200;
+  assert.equal((await request("session/prompt", { sessionId: session.sessionId, text: "/changelog summarize" })).stopReason, "end_turn");
   await request("session/set_config_option", { sessionId: session.sessionId, configId: "mode", value: "native#plan" });
   await request("session/prompt", { sessionId: session.sessionId, text: "/autopilot" });
   const loaded = await request("session/load", { sessionId: "loaded", cwd: root, mcpServers: [] });
@@ -129,6 +142,11 @@ test("proxy preserves negotiation, native metadata, permissions, load and close 
   assert.equal(requests.some((m) => m.method === "session/set_mode"), false);
   assert.equal(requests.some((m) => m.method === "session/prompt" && m.params.prompt[0].text === "/resume"), false);
   assert.equal(requests.some((m) => m.method === "session/prompt" && m.params.prompt[0].text === "/autopilot"), true);
+  const summaries = requests.filter((m) => m.method === "session/prompt" && /^Summarize these official/.test(m.params.prompt[0].text));
+  assert.equal(summaries.length, 1, "a failed changelog fetch is answered locally, not forwarded");
+  assert.deepEqual(messages.filter((m) => m.id !== undefined && !m.method && m.error), [], "no request was answered twice or with an error");
+  assert.match(summaries[0].params.prompt[0].text, /Native notes\./);
+  assert.equal(requests.some((m) => m.method === "session/set_config_option" && m.params.value === "native#plan"), true);
   assert.deepEqual(requests.find((m) => m.method === "session/prompt" && m.params.prompt[0].text.includes("gpt-5.6-luna")).params.prompt, modelPrompt);
   assert.deepEqual(requests.filter((m) => m.method === "session/close").map((m) => m.params.sessionId), ["loaded", "new-session"]);
   assert.equal(requests.some((m) => m.method === "authenticate" && m.params.methodId === "copilot-login"), true);

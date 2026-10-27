@@ -7,7 +7,7 @@ import { CopilotAcpAdapter } from "../src/adapter.js";
 
 function makeAdapter(root, notifications) {
   return new CopilotAcpAdapter({
-    config: { cwd: "/tmp", copilotSessionStatePath: root, copilotModel: "auto", copilotMode: "agent", copilotModels: ["auto"], copilotModelsOverride: true },
+    config: { cwd: "/tmp", copilotSessionStatePath: root },
     runner: {}, notify(method, params) { notifications.push({ method, params }); },
   });
 }
