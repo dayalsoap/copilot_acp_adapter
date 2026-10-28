@@ -60,7 +60,7 @@ function makeFixture(fixture) {
   writeFileSync(join(fixture, "test.js"), 'import assert from "node:assert/strict"; assert.equal(1, 1);');
   writeFileSync(
     join(fixture, ".github", "agents", "test-diagnostician.agent.md"),
-    "---\nname: test-diagnostician\ndescription: Runs the isolated test suite without changing files.\ntools:\n  - shell\n---\nRun exactly npm test with no additional flags. Do not delegate. Do not edit files.\n",
+    "---\nname: test-diagnostician\ndescription: Runs the isolated test suite without changing files.\ntools:\n  - shell\n---\nRun exactly npm test with no additional flags. Your first and only tool call is that one shell command: do not list, read, or inspect files first, and do not chain other commands onto it. Then reply with its exit status and pass/fail summary. Do not delegate. Do not edit files.\n",
   );
 }
 
@@ -106,6 +106,9 @@ async function runScenario(mode, client, cwd, config, requestedParent, requested
     // alias/routing mismatch diagnosable instead of losing journal evidence.
     diagnostic.mismatches = modelMismatches(diagnostic, requestedSubagent);
     assert.equal(call.rawInput?.model, requestedSubagent, evidence(diagnostic, client, "delegation requested-model mismatch"));
+    // Checked before completion: a refused request is the usual reason a
+    // subagent ends with subagent.failed, so name it rather than the symptom.
+    assert.equal(client.deniedPermissions.length, 0, evidence(diagnostic, client, "native requested a permission other than the fixture's npm test; it was cancelled"));
     assertCompletedSubagentEvidence(events.get(call.toolCallId), {
       toolCallId: call.toolCallId,
       agentName: "test-diagnostician",
@@ -113,10 +116,11 @@ async function runScenario(mode, client, cwd, config, requestedParent, requested
       firstDispatchedModel: requestedSubagent,
       explicitModelOverride: requestedSubagent,
     });
-    assert.equal(client.deniedPermissions.length, 0, evidence(diagnostic, client, "native requested a permission other than the fixture's npm test; it was cancelled"));
+    diagnostic.permissions = permissionSummary(client);
     return successfulScenario(diagnostic);
   } catch (error) {
     diagnostic.mismatches = modelMismatches(diagnostic, requestedSubagent);
+    diagnostic.permissions = permissionSummary(client);
     error.diagnostic = diagnostic;
     error.sessionId = diagnostic.sessionId;
     throw error;
@@ -407,6 +411,13 @@ function permissionResult(client, message) {
   return { outcome: { outcome: "cancelled" }, reason: "live test allows only the fixture's npm test" };
 }
 
+function permissionSummary(client) {
+  return {
+    approved: client.approvedPermissions.length,
+    denied: client.deniedPermissions.map((item) => item.params?.toolCall?.title || ""),
+  };
+}
+
 function observe(client, message) {
   const update = message.params?.update;
   if (message.method === "session/update" && update?.sessionUpdate === "tool_call") {
@@ -502,7 +513,8 @@ test("offline live harness fixture gives the child test-only instructions", (t) 
   t.after(() => rmSync(fixture, { recursive: true, force: true }));
   makeFixture(fixture);
   const body = readFileSync(join(fixture, ".github", "agents", "test-diagnostician.agent.md"), "utf8");
-  assert.match(body, /Run exactly npm test with no additional flags\. Do not delegate\. Do not edit files\./);
+  assert.match(body, /Run exactly npm test with no additional flags\. Your first and only tool call is that one shell command/);
+  assert.match(body, /Do not delegate\. Do not edit files\./);
   assert.doesNotMatch(body, /delegate synchronously|do not run tests yourself/i);
 });
 

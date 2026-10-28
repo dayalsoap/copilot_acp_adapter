@@ -115,8 +115,20 @@ the user's own text, so model names in the release notes don't trigger it.
   cancels everything else, including `allow_always`-only offers and `npm test` with extra
   arguments. A failure now lists the denied request titles. The match on
   `rawInput.command` comes from the journal: there, the subagent's tool arguments were
-  `{command: "npm test", ...}`. It has not yet been seen in an ACP permission request; the
-  next live run will show whether it matches.
+  `{command: "npm test", ...}`. It has not yet been seen in an ACP permission request.
+- **Second entitled live run** (session `c00f8589…`): the `subagent.failed` evidence
+  worked. The report showed requested, first dispatched and override all as
+  `gpt-5.6-luna`, with `evidence: subagent.failed`. The subagent failed again, for a
+  different reason: it never asked for `npm test`. It first tried
+  `pwd && … ls -la` and `sed -n '1,200p' package.json`. The harness correctly refused
+  both, and the subagent then ended without a response. Two changes followed:
+  - The fixture agent's instructions now say its first and only tool call is
+    `npm test`, with no inspection first and no chained commands.
+  - The test checks for refused permissions before the completion check, and prints them
+    in its JSON line (`permissions: {approved, denied: [titles]}`), so the cause is
+    reported instead of the symptom.
+
+  This is model behavior, so instructions can make it less likely but can't guarantee it.
 
 ## Line counts (`wc -l src/*.js`)
 
