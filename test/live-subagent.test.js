@@ -89,7 +89,7 @@ async function runScenario(mode, client, cwd, config, requestedParent, requested
     const events = await waitForJournal(config, diagnostic.sessionId, [call.toolCallId], deadline);
     const completion = completionEvidence(events.get(call.toolCallId));
     if (completion) {
-      diagnostic.observed.evidence = "subagent.completed";
+      diagnostic.observed.evidence = completion.eventType;
       diagnostic.observed.firstDispatchedModel = completion.firstDispatchedModel || null;
       diagnostic.observed.explicitModelOverride = completion.explicitModelOverride || null;
     } else {
@@ -113,7 +113,7 @@ async function runScenario(mode, client, cwd, config, requestedParent, requested
       firstDispatchedModel: requestedSubagent,
       explicitModelOverride: requestedSubagent,
     });
-    assert.equal(client.deniedPermissions.length, 0, evidence(diagnostic, client, "native requested a permission; it was cancelled"));
+    assert.equal(client.deniedPermissions.length, 0, evidence(diagnostic, client, "native requested a permission other than the fixture's npm test; it was cancelled"));
     return successfulScenario(diagnostic);
   } catch (error) {
     diagnostic.mismatches = modelMismatches(diagnostic, requestedSubagent);
@@ -129,7 +129,7 @@ function assertAdapterReport(report, call, completion, diagnostic, client) {
   assert.equal(meta.activity, "subagent-dispatch-report", evidence(diagnostic, client, "adapter report activity mismatch"));
   assert.equal(meta.toolCallId, call.toolCallId, evidence(diagnostic, client, "adapter report toolCallId mismatch"));
   assert.equal(meta.requestedModel, call.rawInput?.model, evidence(diagnostic, client, "adapter report requestedModel mismatch"));
-  assert.equal(meta.evidence, completion ? "subagent.completed" : "unavailable", evidence(diagnostic, client, "adapter report evidence mismatch"));
+  assert.equal(meta.evidence, completion?.eventType || "unavailable", evidence(diagnostic, client, "adapter report evidence mismatch"));
   assert.equal(meta.firstDispatchedModel, completion?.firstDispatchedModel || "unknown", evidence(diagnostic, client, "adapter report firstDispatchedModel mismatch"));
   assert.equal(meta.explicitModelOverride, completion?.explicitModelOverride || null, evidence(diagnostic, client, "adapter report explicitModelOverride mismatch"));
   assert.equal(meta.mismatch, Boolean(completion?.firstDispatchedModel && call.rawInput?.model && completion.firstDispatchedModel !== call.rawInput.model), evidence(diagnostic, client, "adapter report mismatch flag mismatch"));
@@ -229,6 +229,7 @@ class BackendClient {
     this.backend = backend;
     this.toolCalls = [];
     this.reports = [];
+    this.approvedPermissions = [];
     this.deniedPermissions = [];
     this.closePromise = null;
     backend.sendToClient = (message) => this.receive(message);
@@ -238,8 +239,7 @@ class BackendClient {
     observe(this, message);
     if (message?.id === undefined || !message.method) return;
     if (message.method === "session/request_permission") {
-      this.deniedPermissions.push(message);
-      this.backend.forwardClientMessage({ jsonrpc: "2.0", id: message.id, result: { outcome: { outcome: "cancelled" }, reason: "live test denies permissions" } });
+      this.backend.forwardClientMessage({ jsonrpc: "2.0", id: message.id, result: permissionResult(this, message) });
       return;
     }
     this.backend.forwardClientMessage({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: `Method not found: ${message.method}` } });
@@ -284,6 +284,7 @@ class ProcessClient {
     this.pending = new Map();
     this.toolCalls = [];
     this.reports = [];
+    this.approvedPermissions = [];
     this.deniedPermissions = [];
     this.closePromise = null;
 
@@ -316,8 +317,7 @@ class ProcessClient {
   handleMessage(message) {
     observe(this, message);
     if (message.method === "session/request_permission") {
-      this.deniedPermissions.push(message);
-      this.reply(message.id, { outcome: { outcome: "cancelled" }, reason: "live test denies permissions" });
+      this.reply(message.id, permissionResult(this, message));
       return;
     }
     if (message.id !== undefined && this.pending.has(message.id)) {
@@ -393,6 +393,20 @@ class ProcessClient {
   }
 }
 
+// The subagent must run the fixture's own suite to complete, so allow exactly
+// that one shell command once. Every other permission request is cancelled.
+function permissionResult(client, message) {
+  const toolCall = message.params?.toolCall || {};
+  const command = typeof toolCall.rawInput?.command === "string" ? toolCall.rawInput.command.trim() : "";
+  const allowOnce = (message.params?.options || []).find((option) => option.kind === "allow_once");
+  if (command === "npm test" && allowOnce) {
+    client.approvedPermissions.push(message);
+    return { outcome: { outcome: "selected", optionId: allowOnce.optionId } };
+  }
+  client.deniedPermissions.push(message);
+  return { outcome: { outcome: "cancelled" }, reason: "live test allows only the fixture's npm test" };
+}
+
 function observe(client, message) {
   const update = message.params?.update;
   if (message.method === "session/update" && update?.sessionUpdate === "tool_call") {
@@ -404,7 +418,7 @@ function observe(client, message) {
 }
 
 function evidence(diagnostic, client, problem) {
-  return `${problem}; mode=${diagnostic.mode} session=${diagnostic.sessionId || "unknown"} requestedParent=${diagnostic.requestedParent} requestedSubagent=${diagnostic.requestedSubagent} actualRequested=${diagnostic.observed.requestedModel || "unknown"} actualFirstDispatched=${diagnostic.observed.firstDispatchedModel || "unknown"} actualOverride=${diagnostic.observed.explicitModelOverride || "unknown"} toolCalls=${client.toolCalls.length} reports=${client.reports.length} deniedPermissions=${client.deniedPermissions.length}`;
+  return `${problem}; mode=${diagnostic.mode} session=${diagnostic.sessionId || "unknown"} requestedParent=${diagnostic.requestedParent} requestedSubagent=${diagnostic.requestedSubagent} actualRequested=${diagnostic.observed.requestedModel || "unknown"} actualFirstDispatched=${diagnostic.observed.firstDispatchedModel || "unknown"} actualOverride=${diagnostic.observed.explicitModelOverride || "unknown"} toolCalls=${client.toolCalls.length} reports=${client.reports.length} approvedPermissions=${client.approvedPermissions.length} deniedPermissions=${client.deniedPermissions.length} deniedTitles=${JSON.stringify(client.deniedPermissions.map((item) => item.params?.toolCall?.title || ""))}`;
 }
 
 function raceAbort(promise, signal) {
@@ -509,9 +523,23 @@ test("offline live harness records and cancels ProcessClient permissions", async
   try {
     assert.deepEqual(await client.request("session/prompt", {}, undefined), { ok: true });
     assert.equal(client.deniedPermissions.length, 1);
+    assert.equal(client.approvedPermissions.length, 0);
   } finally {
     await client.close();
   }
+});
+
+test("offline live harness allows only the fixture's npm test, once", () => {
+  const client = { approvedPermissions: [], deniedPermissions: [] };
+  const options = [{ optionId: "always", kind: "allow_always" }, { optionId: "once", kind: "allow_once" }, { optionId: "no", kind: "reject_once" }];
+  const request = (command) => ({ params: { toolCall: { title: command, rawInput: { command } }, options } });
+  assert.deepEqual(permissionResult(client, request("npm test")), { outcome: { outcome: "selected", optionId: "once" } });
+  for (const command of ["npm test && rm -rf .", "npm run build", "npm test --watch"]) {
+    assert.equal(permissionResult(client, request(command)).outcome.outcome, "cancelled", command);
+  }
+  assert.equal(permissionResult(client, { params: { toolCall: { rawInput: { command: "npm test" } }, options: [options[0]] } }).outcome.outcome, "cancelled", "never upgrades to allow_always");
+  assert.equal(client.approvedPermissions.length, 1);
+  assert.equal(client.deniedPermissions.length, 4);
 });
 
 test("offline live harness close rejects pending requests and clears timers", async () => {
