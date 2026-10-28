@@ -83,15 +83,23 @@ the user's own text, so model names in the release notes don't trigger it.
 - **Transport:** the FIFO transport, framing auto-detect, and title normalization (3
   multi-line titles in the probe). None of the REVIEW.md transport fixes were touched.
 - **Journal-based subagent/model evidence** (`subagent-reports.js`, `model-reports.js`,
-  `reportNativeSubagentDispatch`, `nativeSubagentStarts`). This is the default, and I
-  could not gather the evidence needed to remove it. My one live delegation attempt ran in
-  a shell that can't see the Copilot login: 1.0.93 and 1.0.105 answer `session/new`
-  there with `Authentication required`. 1.0.104 instead returned an `auto`-only session
-  whose prompt then hung, so no model call was made and no credit was used. Your first
-  `npm run test:live` failed earlier for a different reason: the free plan didn't offer
-  `gpt-5.6-terra`, so `session/set_model` was rejected before any delegation. To decide,
-  rerun the live test with models the account offers, for example
-  `COPILOT_LIVE_PARENT_MODEL=gpt-6-luna COPILOT_LIVE_SUBAGENT_MODEL=gpt-5.6-luna`.
+  `reportNativeSubagentDispatch`, `nativeSubagentStarts`). The live run gave no reason to
+  remove it. Your run on 1.0.105 with parent `gpt-6-luna` and subagent `gpt-5.6-luna`
+  (session `6121e30d…`) did delegate. The ACP `tool_call` carried the requested model
+  (`rawInput.model = gpt-5.6-luna`), but nothing on the wire that the adapter saw carried
+  the dispatched model. That still comes only from the journal: `subagent.started` and
+  `subagent.configured` there name `gpt-5.6-luna`, with
+  `modelSelectionSource: explicit_override`. The test still failed, for two reasons
+  unrelated to the cleanup:
+  - **The harness cancels every permission request.** The subagent's `npm test` shell call
+    needed one, was denied (`denied-interactively-by-user`), and the subagent ended with
+    `subagent.failed` ("Agent completed but produced no response") instead of
+    `subagent.completed`.
+  - **The reporter only reads `subagent.completed`.** `subagent.failed` carries the same
+    `firstDispatchedModel` (`gpt-5.6-luna`) and `explicitModelOverride` fields, but
+    `subagent-reports.js` and `model-reports.js` ignore it, so the report said
+    `firstDispatchedModel: unknown`, `evidence: unavailable`. This gap predates the cleanup
+    and is left as it was.
 - **`activity-status.js` status lines:** kept, because the handoff says to ask you
   rather than decide alone (see below).
 - **`project-agents.js`:** its agent discovery is used by `/subagents`.
@@ -146,6 +154,10 @@ adopted native sessions.
   "Delegating to `Y` subagent." thoughts stay? Native now sends live title and plan
   updates. If agent-shell already shows the same information, they are duplicates. They
   are unchanged pending your call.
+- **Subagent failure evidence:** possible follow-ups are (a) accepting `subagent.failed` as
+  dispatch evidence, since it carries the same model fields, and (b) having the live
+  harness allow exactly the subagent's `npm test` permission, so the scenario can reach
+  `subagent.completed`.
 - **Dead config fields, left alone:** `ghCommand` and `copilotHome` in `config.js` were
   unused before this cleanup and weren't on the removal list.
 - **`commands.js`:** after the cleanup, the full catalog (`listCommands`, `COMMAND_SET`,
