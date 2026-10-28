@@ -99,16 +99,31 @@ the user's own text, so model names in the release notes don't trigger it.
   - **The reporter only reads `subagent.completed`.** `subagent.failed` carries the same
     `firstDispatchedModel` (`gpt-5.6-luna`) and `explicitModelOverride` fields, but
     `subagent-reports.js` and `model-reports.js` ignore it, so the report said
-    `firstDispatchedModel: unknown`, `evidence: unavailable`. This gap predates the cleanup
-    and is left as it was.
+    `firstDispatchedModel: unknown`, `evidence: unavailable`. This gap predated the
+    cleanup. It is now fixed (see "Follow-ups done after the cleanup").
 - **`project-agents.js`:** its agent discovery is used by `/subagents`.
+
+## Follow-ups done after the cleanup
+
+- **`subagent.failed` counts as dispatch evidence.** The subagent dispatch report and
+  the model report now read `subagent.failed` as well as `subagent.completed`. A failed
+  subagent's report says "(subagent failed)" and `_meta.evidence` is `subagent.failed`.
+  It still shows the recorded first dispatched model. The strict live verifier still
+  requires `subagent.completed` and names `subagent.failed` when it sees one.
+- **The live test allows exactly the fixture's `npm test`, once.** It picks `allow_once`
+  only when the permission request's `rawInput.command` is exactly `npm test`, and
+  cancels everything else, including `allow_always`-only offers and `npm test` with extra
+  arguments. A failure now lists the denied request titles. The match on
+  `rawInput.command` comes from the journal: there, the subagent's tool arguments were
+  `{command: "npm test", ...}`. It has not yet been seen in an ACP permission request; the
+  next live run will show whether it matches.
 
 ## Line counts (`wc -l src/*.js`)
 
 | File | Before | After |
 |---|---:|---:|
 | activity-status.js | 29 | — |
-| adapter.js | 2352 | 1168 |
+| adapter.js | 2352 | 1170 |
 | auth.js | 188 | 188 |
 | changelog.js | 54 | 54 |
 | commands.js | 174 | 174 |
@@ -124,10 +139,10 @@ the user's own text, so model names in the release notes don't trigger it.
 | session-store.js | 199 | — |
 | session-title.js | — | 15 |
 | settings.js | 96 | 96 |
-| subagent-reports.js | 100 | 100 |
-| **total** | **5556** | **3234** |
+| subagent-reports.js | 100 | 104 |
+| **total** | **5556** | **3240** |
 
-Tests went from 115 to 80 (79 pass, plus the opt-in live test, which is skipped). Tests
+Tests went from 115 to 84 (83 pass, plus the opt-in live test, which is skipped). Tests
 for deleted code were deleted. Tests that used `session/new` or `copilotBackend` now use
 adopted native sessions.
 
@@ -149,10 +164,6 @@ adopted native sessions.
 
 ## Open questions and possible follow-ups
 
-- **Subagent failure evidence:** possible follow-ups are (a) accepting `subagent.failed` as
-  dispatch evidence, since it carries the same model fields, and (b) having the live
-  harness allow exactly the subagent's `npm test` permission, so the scenario can reach
-  `subagent.completed`.
 - **Dead config fields, left alone:** `ghCommand` and `copilotHome` in `config.js` were
   unused before this cleanup and weren't on the removal list.
 - **`commands.js`:** after the cleanup, the full catalog (`listCommands`, `COMMAND_SET`,

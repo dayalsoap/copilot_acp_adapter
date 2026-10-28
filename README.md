@@ -320,9 +320,11 @@ The adapter records the **requested model** from a delegation `tool_call`'s
 `rawInput`. At the end of that prompt, the adapter makes a bounded (256 KiB tail) best-effort read of the
 specific configured `COPILOT_SESSION_STATE_PATH/<session-id>/events.jsonl` file. For only
 the tool-call IDs observed in that current adapter session, it reports the
-correlated `subagent.completed` event's `firstDispatchedModel`, plus structured
-thought `_meta` fields: `requestedModel`, `firstDispatchedModel`,
-`explicitModelOverride`, `toolCallId`, and `mismatch`.
+correlated `subagent.completed` or `subagent.failed` event's
+`firstDispatchedModel`, plus structured thought `_meta` fields: `requestedModel`,
+`firstDispatchedModel`, `explicitModelOverride`, `toolCallId`, `mismatch`, and
+`evidence` (the event type, or `unavailable`). A failed subagent is labeled
+`(subagent failed)`; it still records the model it was dispatched with.
 
 `firstDispatchedModel` is the CLI's recorded first dispatched model, not a list
 of every model used by a subagent and not independently verified serving-model
@@ -353,7 +355,7 @@ in place of hyphens (for example, `GPT 5.6 Luna`). The report distinguishes:
 - session model calls recorded by `model.call_start` or `assistant.usage`;
 - structured skill invocations and delegation requests;
 - a delegated agent and its first dispatched model recorded by a correlated
-  `subagent.completed` event.
+  `subagent.completed` or `subagent.failed` event (a failure is noted).
 
 If dispatch evidence is unavailable, the output explicitly identifies the
 session model or subagent override **requested from Copilot**, without claiming
@@ -389,7 +391,10 @@ It requires an already authenticated CLI and sends a real request, which can
 consume quota. It creates and removes an isolated temporary fixture containing
 a tiny `npm test` and a no-edit `test-diagnostician` agent. It does **not** use
 `--allow-all`, log in, change settings, print transcripts or credentials, or
-grant broad permission requests; an unexpected approval request fails clearly.
+grant broad permission requests. It allows exactly one thing, once: the
+subagent's shell command `npm test` in the fixture (`allow_once`, never
+`allow_always`). Any other approval request is cancelled and fails the test
+clearly, listing the denied request titles.
 The primary path launches `bin/copilot-acp-adapter.js` with Node, creates the
 session with `{cwd,mcpServers:[]}`,
 and explicitly calls `session/set_model` for the parent model. With
@@ -399,7 +404,8 @@ prints concise JSON with its mode, session ID, requested parent/subagent,
 recorded first dispatch and override, including mismatches; both paths run even
 if the first fails. A native-only result is still useful diagnostic reporting.
 The strict verifier requires an observed delegated tool call and a correlated
-`subagent.completed` record with exact agent/requested/first-dispatched/
+`subagent.completed` record (a `subagent.failed` record is reported but fails
+the strict check) with exact agent/requested/first-dispatched/
 explicit-override model strings, rather than assistant prose. Consequently an
 unknown or missing journal record is a strict live-test failure, while normal
 adapter runtime reporting remains best-effort and labels such evidence

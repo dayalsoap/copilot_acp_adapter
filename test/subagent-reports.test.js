@@ -10,8 +10,8 @@ import {
   readSubagentCompletions,
 } from "../src/subagent-reports.js";
 
-function event(toolCallId, agentName, model, firstDispatchedModel, explicitModelOverride = model) {
-  return { type: "subagent.completed", agentId: `agent-${agentName}`, data: { toolCallId, agentName, model, firstDispatchedModel, explicitModelOverride } };
+function event(toolCallId, agentName, model, firstDispatchedModel, explicitModelOverride = model, type = "subagent.completed") {
+  return { type, agentId: `agent-${agentName}`, data: { toolCallId, agentName, model, firstDispatchedModel, explicitModelOverride } };
 }
 
 function state(lines) {
@@ -32,9 +32,21 @@ test("correlates only requested tool calls in one session despite malformed and 
   const found = readSubagentCompletions({ sessionStatePath: root, sessionId: "session-1", toolCallIds: ["call-1"] });
   assert.equal(found.size, 1);
   assert.deepEqual(completionEvidence(found.get("call-1")), {
-    toolCallId: "call-1", agentName: "test-diagnostician", requestedModel: "luna",
+    eventType: "subagent.completed", toolCallId: "call-1", agentName: "test-diagnostician", requestedModel: "luna",
     firstDispatchedModel: "mai-code-1.1-flash", explicitModelOverride: "luna", agentId: "agent-test-diagnostician",
   });
+});
+
+test("a failed subagent is evidence too, but not a completion", (t) => {
+  const failed = event("call-1", "test-diagnostician", "luna", "luna", "luna", "subagent.failed");
+  const root = state([JSON.stringify(failed), JSON.stringify({ type: "subagent.started", data: { toolCallId: "call-2" } })]);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const found = readSubagentCompletions({ sessionStatePath: root, sessionId: "session-1", toolCallIds: ["call-1", "call-2"] });
+  assert.deepEqual([...found.keys()], ["call-1"]);
+  const evidence = completionEvidence(found.get("call-1"));
+  assert.equal(evidence.eventType, "subagent.failed");
+  assert.equal(evidence.firstDispatchedModel, "luna");
+  assert.throws(() => assertCompletedSubagentEvidence(failed, { requestedModel: "luna" }), /subagent ended with subagent\.failed/);
 });
 
 test("missing files, unsafe session ids, and unknown dispatch are non-fatal", () => {

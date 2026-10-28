@@ -420,9 +420,11 @@ export class CopilotAcpAdapter {
       const dispatched = evidence?.firstDispatchedModel || "unknown";
       const mismatch = Boolean(evidence?.firstDispatchedModel && start.requestedModel && dispatched !== start.requestedModel);
       const text = [
-        evidence
-          ? `Subagent \`${start.agentName}\` model report.`
-          : `Subagent \`${start.agentName}\` model report (completion unverified).`,
+        !evidence
+          ? `Subagent \`${start.agentName}\` model report (completion unverified).`
+          : evidence.eventType === "subagent.failed"
+            ? `Subagent \`${start.agentName}\` model report (subagent failed).`
+            : `Subagent \`${start.agentName}\` model report.`,
         `Requested model: \`${start.requestedModel || "unknown"}\`.`,
         `Recorded first dispatched model: \`${dispatched}\`.`,
         ...(mismatch ? ["Warning: requested and recorded dispatched models differ; this can be Copilot alias/routing, not an adapter error."] : []),
@@ -441,7 +443,7 @@ export class CopilotAcpAdapter {
             requestedModel: start.requestedModel || "unknown",
             firstDispatchedModel: dispatched,
             explicitModelOverride: evidence?.explicitModelOverride ?? null,
-            evidence: evidence ? "subagent.completed" : "unavailable",
+            evidence: evidence?.eventType || "unavailable",
             mismatch,
           },
         },

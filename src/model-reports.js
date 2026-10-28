@@ -1,6 +1,6 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { resolve, sep } from "node:path";
-import { completionEvidence } from "./subagent-reports.js";
+import { completionEvidence, SUBAGENT_END_EVENTS } from "./subagent-reports.js";
 
 const MAX_EVENT_BYTES = 256 * 1024;
 
@@ -72,7 +72,7 @@ export function readModelJournal(sessionStatePath, sessionId, cursor) {
     for (const line of lines) {
       try {
         const event = JSON.parse(line);
-        if (["model.call_start", "assistant.usage", "subagent.completed"].includes(event?.type)) events.push(event);
+        if (["model.call_start", "assistant.usage", ...SUBAGENT_END_EVENTS].includes(event?.type)) events.push(event);
       } catch {
         // Partial writes and malformed records cannot affect prompt execution.
       }
@@ -92,7 +92,7 @@ export function recordModelEvent(report, event) {
       report.modelEvidence.add(event.type);
     }
   }
-  if (event?.type === "subagent.completed") {
+  if (SUBAGENT_END_EVENTS.includes(event?.type)) {
     const evidence = completionEvidence(event);
     if (report.delegations.has(evidence.toolCallId)) report.completions.set(evidence.toolCallId, evidence);
   }
@@ -119,7 +119,7 @@ export function modelReportOutput(report, response = {}) {
   const delegations = report.overlap ? [] : [...report.delegations].map(([toolCallId, request]) => {
     const evidence = report.completions.get(toolCallId);
     return { toolCallId, ...request, recordedAgent: evidence?.agentName || "",
-      firstDispatchedModel: evidence?.firstDispatchedModel || "" };
+      firstDispatchedModel: evidence?.firstDispatchedModel || "", failed: evidence?.eventType === "subagent.failed" };
   });
   const quoted = (values) => values.map((value) => `\`${String(value).replaceAll("`", "")}\``).join(", ");
   const lines = [
@@ -137,7 +137,7 @@ export function modelReportOutput(report, response = {}) {
     if (!delegations.length) lines.push("No subagent delegation observed for this request.");
     for (const delegation of delegations) {
       lines.push(delegation.recordedAgent
-        ? `Subagent recorded by Copilot: ${quoted([delegation.recordedAgent])} (requested agent: ${quoted([delegation.requestedAgent])}).`
+        ? `Subagent recorded by Copilot: ${quoted([delegation.recordedAgent])} (requested agent: ${quoted([delegation.requestedAgent])})${delegation.failed ? "; it failed" : ""}.`
         : `Subagent requested from Copilot: ${quoted([delegation.requestedAgent])}; actual agent unavailable.`);
       lines.push(delegation.firstDispatchedModel
         ? `Recorded first dispatched subagent model: ${quoted([delegation.firstDispatchedModel])}.`

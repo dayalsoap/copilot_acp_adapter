@@ -79,6 +79,21 @@ test("delegation reports the completed agent and first dispatch even when both d
   assert.equal(f.report()._meta.delegations[0].requestedAgent, "requested-runner");
 });
 
+test("a failed delegation still reports the recorded agent and first dispatch", async (t) => {
+  const f = await fixture(t);
+  const context = f.adapter.beginModelReport("session", "run tests with gpt-5.6-luna");
+  f.adapter.enhanceNativeMessages({ method: "session/update", params: { sessionId: "session", update: {
+    sessionUpdate: "tool_call", toolCallId: "task", toolName: "task", rawInput: { agent_type: "test-diagnostician", model: "gpt-5.6-luna" },
+  } } });
+  f.append([{ type: "subagent.failed", agentId: "child", data: {
+    toolCallId: "task", agentName: "test-diagnostician", model: "gpt-5.6-luna", firstDispatchedModel: "gpt-5.6-luna",
+  } }]);
+  await f.adapter.finishModelReport(context);
+  assert.match(f.report().content.text, /Subagent recorded by Copilot: `test-diagnostician` \(requested agent: `test-diagnostician`\); it failed\./);
+  assert.match(f.report().content.text, /Recorded first dispatched subagent model: `gpt-5\.6-luna`/);
+  assert.equal(f.report()._meta.delegations[0].failed, true);
+});
+
 test("unavailable evidence reports the actual request sent to Copilot and never echoes the desired model as used", async (t) => {
   const f = await fixture(t);
   const context = f.adapter.beginModelReport("session", "run tests with gpt-5.6-luna");

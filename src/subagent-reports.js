@@ -3,6 +3,8 @@ import { resolve, sep } from "node:path";
 
 // A bounded tail avoids making prompt completion depend on an unbounded journal.
 const MAX_EVENT_BYTES = 256 * 1024;
+// A subagent ends with exactly one of these; both record the dispatched model.
+export const SUBAGENT_END_EVENTS = ["subagent.completed", "subagent.failed"];
 
 /**
  * Reads only the tail of one known Copilot session's event file. Session and
@@ -39,11 +41,11 @@ export function readSubagentCompletions({ sessionStatePath, sessionId, toolCallI
     // ignores it, as it also does a concurrently-written final line.
     const completions = new Map();
     for (const line of text.split(/\r?\n/)) {
-      if (!line.includes("subagent.completed")) continue;
+      if (!SUBAGENT_END_EVENTS.some((type) => line.includes(type))) continue;
       try {
         const event = JSON.parse(line);
         const toolCallId = event?.data?.toolCallId;
-        if (event?.type === "subagent.completed" && ids.has(toolCallId)) {
+        if (SUBAGENT_END_EVENTS.includes(event?.type) && ids.has(toolCallId)) {
           completions.set(toolCallId, event);
         }
       } catch {
@@ -65,9 +67,10 @@ export function readSubagentCompletions({ sessionStatePath, sessionId, toolCallI
 }
 
 export function completionEvidence(event) {
-  if (!event || event.type !== "subagent.completed") return null;
+  if (!SUBAGENT_END_EVENTS.includes(event?.type)) return null;
   const data = event.data || {};
   return {
+    eventType: event.type,
     toolCallId: typeof data.toolCallId === "string" ? data.toolCallId : "",
     agentName: typeof data.agentName === "string" ? data.agentName : "",
     requestedModel: typeof data.model === "string" ? data.model : "",
@@ -81,6 +84,7 @@ export function assertCompletedSubagentEvidence(event, { toolCallId, agentName, 
   const evidence = completionEvidence(event);
   const problems = [];
   if (!evidence) problems.push("missing correlated subagent.completed event");
+  else if (evidence.eventType !== "subagent.completed") problems.push(`subagent ended with ${evidence.eventType}`);
   else {
     if (toolCallId && evidence.toolCallId !== toolCallId) problems.push(`toolCallId=${evidence.toolCallId || "missing"}`);
     if (agentName && evidence.agentName !== agentName) problems.push(`agent=${evidence.agentName || "missing"}`);

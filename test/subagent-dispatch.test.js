@@ -68,3 +68,28 @@ test("native subagent completion reports unknown rather than claiming configured
   assert.equal(report.params.update._meta.firstDispatchedModel, "unknown");
   assert.equal(report.params.update._meta.evidence, "unavailable");
 });
+
+test("a failed subagent still reports its recorded dispatch model", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "copilot-dispatch-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "session4"));
+  writeFileSync(join(root, "session4", "events.jsonl"), JSON.stringify({
+    type: "subagent.failed", agentId: "child", data: {
+      toolCallId: "call4", agentName: "test-diagnostician", error: "Agent completed but produced no response.",
+      model: "gpt-5.6-luna", firstDispatchedModel: "gpt-5.6-luna", explicitModelOverride: "gpt-5.6-luna",
+    },
+  }));
+  const notifications = [];
+  const adapter = makeAdapter(root, notifications);
+  await adapter.adoptNativeSession({}, { sessionId: "session4" });
+  adapter.enhanceNativeMessages({ method: "session/update", params: { sessionId: "session4", update: {
+    sessionUpdate: "tool_call", toolCallId: "call4", rawInput: { agent_type: "test-diagnostician", model: "gpt-5.6-luna" },
+  } } });
+  await adapter.reportNativeSubagentDispatch("session4");
+  const report = notifications.find((item) => item.params.update._meta?.activity === "subagent-dispatch-report").params.update;
+  assert.match(report.content.text, /model report \(subagent failed\)\. Requested model: `gpt-5\.6-luna`\. Recorded first dispatched model: `gpt-5\.6-luna`\./);
+  assert.equal(report._meta.evidence, "subagent.failed");
+  assert.equal(report._meta.firstDispatchedModel, "gpt-5.6-luna");
+  assert.equal(report._meta.explicitModelOverride, "gpt-5.6-luna");
+  assert.equal(report._meta.mismatch, false);
+});
