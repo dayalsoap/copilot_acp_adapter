@@ -129,6 +129,13 @@ the user's own text, so model names in the release notes don't trigger it.
     reported instead of the symptom.
 
   This is model behavior, so instructions can make it less likely but can't guarantee it.
+- **Third entitled live run passed** (session `69ed74da…`, 2026-10-28). The subagent
+  asked only for `npm test`. The harness approved it through `rawInput.command`
+  (`permissions: {approved: 1, denied: []}`), so that match is now confirmed. The
+  subagent ended with `subagent.completed`. Requested, first dispatched and override
+  models were all `gpt-5.6-luna` with no mismatch, and the adapter's report matched the
+  journal exactly (`evidence: subagent.completed`). The dispatched model still came only
+  from the journal, so the journal-based reporting stays.
 
 ## Line counts (`wc -l src/*.js`)
 
