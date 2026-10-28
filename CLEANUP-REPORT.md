@@ -31,6 +31,17 @@ merged and not pushed. One commit per phase, and `npm test` passed before each o
     the result, is still needed.
   - **`sessionList`:** works and returned 18 sessions. **3 of the titles contain
     newlines**, so the title normalization from `a0528e7` is still needed.
+- **Re-verified on an entitled account with 1.0.105.** Copilot auto-updated itself to
+  1.0.105 later the same day. My first probes ran on a free plan, which offers only
+  `auto`. After the account was upgraded, the probe listed `auto`, `claude-haiku-4.5`,
+  `gpt-6-luna`, `gpt-5.6-luna` and `mai-code-1.1-flash`, with `claude-haiku-4.5` as the
+  current model. It also showed:
+  - the same 35 commands, with none added or removed and no adapter helper advertised;
+  - `session/new` still returns `models`, `modes` and `configOptions`;
+  - `available_commands_update` still arrives before the `session/new` result;
+  - 3 of 18 session titles still contain newlines.
+
+  Every Phase 2–4 decision still holds.
 - **Live `session/set_config_option` check** (scratch script, no prompt): I set
   `configId: "mode"` to the `#plan` URL. Native answered with `current_mode_update`, then
   `config_option_update`, then a response whose mode `currentValue` was `#plan`.
@@ -73,11 +84,14 @@ the user's own text, so model names in the release notes don't trigger it.
   multi-line titles in the probe). None of the REVIEW.md transport fixes were touched.
 - **Journal-based subagent/model evidence** (`subagent-reports.js`, `model-reports.js`,
   `reportNativeSubagentDispatch`, `nativeSubagentStarts`). This is the default, and I
-  could not gather the evidence needed to remove it. I made one live delegation attempt
-  against native with raw events requested. Copilot in my shell reported `no
-  authenticated GitHub host available`, listed only `auto` as a model, and produced no
-  session updates within 240 s. No model call was made and no credit was used. To
-  decide, run `COPILOT_LIVE_TEST=1 npm run test:live` from an authenticated terminal.
+  could not gather the evidence needed to remove it. My one live delegation attempt ran in
+  a shell that can't see the Copilot login: 1.0.93 and 1.0.105 answer `session/new`
+  there with `Authentication required`. 1.0.104 instead returned an `auto`-only session
+  whose prompt then hung, so no model call was made and no credit was used. Your first
+  `npm run test:live` failed earlier for a different reason: the free plan didn't offer
+  `gpt-5.6-terra`, so `session/set_model` was rejected before any delegation. To decide,
+  rerun the live test with models the account offers, for example
+  `COPILOT_LIVE_PARENT_MODEL=gpt-6-luna COPILOT_LIVE_SUBAGENT_MODEL=gpt-5.6-luna`.
 - **`activity-status.js` status lines:** kept, because the handoff says to ask you
   rather than decide alone (see below).
 - **`project-agents.js`:** its agent discovery is used by `/subagents`.
@@ -112,9 +126,9 @@ adopted native sessions.
 
 ## Left for you to check in Emacs agent-shell
 
-1. **Header model and mode.** These now come from native `models`/`modes` unchanged. In
-   my unauthenticated shell, native listed only `Auto` (twice). Check that a logged-in
-   session shows the full model list and that the mode switches.
+1. **Header model and mode.** These now come from native `models`/`modes` unchanged.
+   The upgraded account should show the full model list (the free plan showed only
+   `Auto`, twice). Check that the mode switches.
 2. **Command menu.** It should show native commands, the helpers, and no `/theme`.
    `/help` should list the same set. Try `/changelog summarize last 2`.
 3. **`/login api-key <token>`.** The backend should restart, and a follow-up prompt
