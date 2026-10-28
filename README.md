@@ -27,14 +27,9 @@ The adapter only adds what native ACP still lacks.
   when the adapter's own stdin is piped), auto-detected `Content-Length` or
   newline JSON framing, and whitespace-normalized `session/list` titles (native
   still returns titles with embedded newlines).
-- **Reporting:** visible skill/subagent activity notices, subagent dispatch
-  reports, and model-mention reports built from Copilot's session journal.
-
-When Copilot selects a skill from natural language, the adapter emits a visible
-thought update such as `Enabling test-runner skill.` When Copilot delegates work,
-it similarly emits `Delegating to adapter-explorer subagent.` These notices are
-derived from Copilot's structured skill and task tool calls and are emitted once
-per invocation.
+- **Reporting:** subagent dispatch reports and model-mention reports built
+  from Copilot's session journal. Skill and subagent activity itself is shown
+  through Copilot's own tool-call, title, and plan updates.
 
 ## Usage
 
@@ -321,9 +316,8 @@ selection.
 
 ## Subagent dispatch reporting
 
-A delegation `tool_call` produces a thought update that
-shows the **requested model** from the tool's `rawInput`. At the end of that
-prompt, the adapter makes a bounded (256 KiB tail) best-effort read of the
+The adapter records the **requested model** from a delegation `tool_call`'s
+`rawInput`. At the end of that prompt, the adapter makes a bounded (256 KiB tail) best-effort read of the
 specific configured `COPILOT_SESSION_STATE_PATH/<session-id>/events.jsonl` file. For only
 the tool-call IDs observed in that current adapter session, it reports the
 correlated `subagent.completed` event's `firstDispatchedModel`, plus structured

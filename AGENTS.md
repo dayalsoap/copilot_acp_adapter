@@ -24,7 +24,7 @@ This repository is a dependency-free Node.js ACP adapter. It exposes an ACP v1 J
 - Helpers native doesn't run over ACP: `/help`, `/diff`, `/settings` (via `copilot config`, plus the per-subagent JSON bridge), `/subagents`, `/changelog` (including `/changelog summarize`, which becomes a native prompt), `/experimental`, `/keep-alive`, `/version`, `/update`. A helper runs only while native hasn't advertised the same name.
 - Session plumbing: bare `/exit` maps to native `session/close`; unadvertised slash commands are rejected; native and helper commands are merged; `available_commands_update` is re-sent after the `session/new` result.
 - Transport: FIFO transport for the nested native process, auto-detected framing, and whitespace-normalized `session/list` titles.
-- Reporting: skill/subagent activity notices, subagent dispatch reports, and model-mention reports from the session journal.
+- Reporting: subagent dispatch reports and model-mention reports from the session journal. Skill/subagent activity is left to Copilot's own tool-call, title, and plan updates.
 
 Re-check these against the installed CLI with `node scripts/probe-native-acp.mjs` (read-only, no prompts; writes the ignored `scripts/native-acp-probe.json`).
 
@@ -49,7 +49,7 @@ Re-check these against the installed CLI with `node scripts/probe-native-acp.mjs
 - `src/config.js`: environment config and default Copilot binary detection.
 - `src/session-title.js`: `session/list` title whitespace normalization.
 - `src/settings.js`, `src/project-agents.js`: the `/subagents` and per-subagent `/settings` bridge.
-- `src/model-reports.js`, `src/subagent-reports.js`, `src/activity-status.js`: journal-based reporting and activity notices.
+- `src/model-reports.js`, `src/subagent-reports.js`: journal-based reporting.
 - `scripts/probe-native-acp.mjs`: read-only snapshot of what native ACP advertises.
 - `test/*.test.js`: native Node tests, including the fake-peer subprocess integration test.
 

@@ -62,6 +62,7 @@ merged and not pushed. One commit per phase, and `npm test` passed before each o
 | 4 | `models`/`modes` synthesized from `configOptions` | Native sends `models` and `modes` itself. |
 | 4 | The `/autopilot` → `session/set_mode` rewrite | `/autopilot` is in `commandNames`. |
 | 4 | The `set_config_option(mode)` → `set_mode` rewrite, along with session mode-id tracking | Shown by the live `set_config_option` check above. |
+| Follow-up | `src/activity-status.js` and the "Enabling `X` skill." / "Delegating to `Y` subagent." thought lines it produced | Your decision: use Copilot's own tool-call, title and plan updates. Native `tool_call`s now pass through untouched. The adapter still records each delegation's requested model for the dispatch report. |
 
 One feature moved instead of being deleted. **`/changelog summarize` used to call
 `copilot -p`.** It is now rewritten in `server.js` into an ordinary native prompt that
@@ -100,16 +101,14 @@ the user's own text, so model names in the release notes don't trigger it.
     `subagent-reports.js` and `model-reports.js` ignore it, so the report said
     `firstDispatchedModel: unknown`, `evidence: unavailable`. This gap predates the cleanup
     and is left as it was.
-- **`activity-status.js` status lines:** kept, because the handoff says to ask you
-  rather than decide alone (see below).
 - **`project-agents.js`:** its agent discovery is used by `/subagents`.
 
 ## Line counts (`wc -l src/*.js`)
 
 | File | Before | After |
 |---|---:|---:|
-| activity-status.js | 29 | 29 |
-| adapter.js | 2352 | 1227 |
+| activity-status.js | 29 | — |
+| adapter.js | 2352 | 1168 |
 | auth.js | 188 | 188 |
 | changelog.js | 54 | 54 |
 | commands.js | 174 | 174 |
@@ -126,7 +125,7 @@ the user's own text, so model names in the release notes don't trigger it.
 | session-title.js | — | 15 |
 | settings.js | 96 | 96 |
 | subagent-reports.js | 100 | 100 |
-| **total** | **5556** | **3322** |
+| **total** | **5556** | **3234** |
 
 Tests went from 115 to 80 (79 pass, plus the opt-in live test, which is skipped). Tests
 for deleted code were deleted. Tests that used `session/new` or `copilotBackend` now use
@@ -150,10 +149,6 @@ adopted native sessions.
 
 ## Open questions and possible follow-ups
 
-- **Activity status lines:** should `activity-status.js`'s "Enabling `X` skill." and
-  "Delegating to `Y` subagent." thoughts stay? Native now sends live title and plan
-  updates. If agent-shell already shows the same information, they are duplicates. They
-  are unchanged pending your call.
 - **Subagent failure evidence:** possible follow-ups are (a) accepting `subagent.failed` as
   dispatch evidence, since it carries the same model fields, and (b) having the live
   harness allow exactly the subagent's `npm test` permission, so the scenario can reach

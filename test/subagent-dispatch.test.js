@@ -29,9 +29,8 @@ test("native subagent reports distinguish request from recorded dispatch and ded
     sessionUpdate: "tool_call", toolCallId: "call1", rawInput: { agent_type: "test-diagnostician", model: "gpt-5.6-luna" },
   } } };
   const enhanced = adapter.enhanceNativeMessages(original);
-  assert.equal(enhanced[1], original, "original native message is retained by identity");
-  assert.match(enhanced[0].params.update.content.text, /Requested model: `gpt-5\.6-luna`/);
-  assert.equal(enhanced[0].params.update._meta.requestedModel, "gpt-5.6-luna");
+  assert.deepEqual(enhanced, [original]);
+  assert.strictEqual(enhanced[0], original, "original native message is retained by identity");
   await adapter.reportNativeSubagentDispatch("session1");
   const report = notifications.find((item) => item.params.update._meta?.activity === "subagent-dispatch-report");
   assert.match(report.params.update.content.text, /Recorded first dispatched model: `mai-code-1\.1-flash`/);

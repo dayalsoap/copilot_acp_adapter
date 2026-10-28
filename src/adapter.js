@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { basename, dirname } from "node:path";
-import { activityStatusForTool } from "./activity-status.js";
 import { DEFAULT_CHANGELOG_URL, fetchCopilotChangelog, selectChangelog } from "./changelog.js";
 import {
   buildGithubLoginCommand,
@@ -26,7 +25,6 @@ import {
 import { completionEvidence, readSubagentCompletions } from "./subagent-reports.js";
 import { mentionedModels, modelReportOutput, readModelJournal, recordModelEvent, recordModelTool, snapshotModelJournal } from "./model-reports.js";
 
-const MAX_REPORTED_ACTIVITIES = 2000;
 const MAX_TRACKED_SUBAGENTS = 500;
 
 // Only helpers implemented by this adapter belong beside native commands.
@@ -58,7 +56,6 @@ export class CopilotAcpAdapter {
     this.fetchImpl = fetchImpl;
     this.changelogPromise = null;
     this.activeOperations = new Map();
-    this.reportedNativeActivities = new Set();
     // Native ACP tells us what was requested in rawInput, while the session
     // journal is the only observed source for firstDispatchedModel.
     this.nativeSubagentStarts = new Map();
@@ -332,48 +329,10 @@ export class CopilotAcpAdapter {
         recordModelTool(report, update);
       }
     }
-    if (enhanced.method !== "session/update" || update?.sessionUpdate !== "tool_call") {
-      return [enhanced];
+    if (enhanced.method === "session/update" && update?.sessionUpdate === "tool_call") {
+      this.trackNativeSubagentStart(enhanced.params?.sessionId || "", update);
     }
-
-    const status = activityStatusForTool(update.toolName, update.rawInput, update.title);
-    const sessionId = enhanced.params?.sessionId || "";
-    const activityId = `${sessionId}:${update.toolCallId || status}`;
-    if (!status || this.reportedNativeActivities.has(activityId)) {
-      return [enhanced];
-    }
-    this.trackNativeSubagentStart(sessionId, update);
-    this.reportedNativeActivities.add(activityId);
-    // One entry per tool call, and sessions are long-lived. Evict oldest-first.
-    while (this.reportedNativeActivities.size > MAX_REPORTED_ACTIVITIES) {
-      this.reportedNativeActivities.delete(
-        this.reportedNativeActivities.values().next().value,
-      );
-    }
-
-    return [
-      {
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: enhanced.params?.sessionId,
-          update: {
-            sessionUpdate: "agent_thought_chunk",
-            messageId: randomUUID(),
-            content: {
-              type: "text",
-              text: nativeActivityText(status, update.rawInput),
-            },
-            _meta: {
-              activity: status.startsWith("Enabling") ? "skill" : "subagent",
-              toolCallId: update.toolCallId,
-              ...(subagentStartMetadata(update.rawInput) || {}),
-            },
-          },
-        },
-      },
-      enhanced,
-    ];
+    return [enhanced];
   }
 
   beginModelReport(sessionId, prompt) {
@@ -525,21 +484,11 @@ export class CopilotAcpAdapter {
     if (params.sessionId) {
       this.cancel({ sessionId: params.sessionId, reason: "Session closed" });
       this.sessions.delete(params.sessionId);
-      this.clearReportedNativeActivities(params.sessionId);
       this.nativeSubagentStarts.delete(params.sessionId);
       this.nativeCommands.delete(params.sessionId);
       this.modelReportTurns.delete(params.sessionId);
     }
     return {};
-  }
-
-  clearReportedNativeActivities(sessionId) {
-    const prefix = `${sessionId}:`;
-    for (const activityId of this.reportedNativeActivities) {
-      if (activityId.startsWith(prefix)) {
-        this.reportedNativeActivities.delete(activityId);
-      }
-    }
   }
 
   cancel(params = {}) {
@@ -957,7 +906,6 @@ export class CopilotAcpAdapter {
       }
       this.nativeCommands.clear();
       this.nativeSubagentStarts.clear();
-      this.reportedNativeActivities.clear();
       this.modelReportTurns.clear();
       return {
         restarted: true,
@@ -1038,13 +986,6 @@ function subagentStartMetadata(rawInput) {
   // This is a request only. It is intentionally never used as dispatch proof.
   const requestedModel = typeof input.model === "string" ? input.model.trim() : "";
   return { agentName: agentName.trim(), requestedModel };
-}
-
-function nativeActivityText(status, rawInput) {
-  const metadata = subagentStartMetadata(rawInput);
-  return metadata?.requestedModel
-    ? `${status} Requested model: \`${metadata.requestedModel}\`.\n`
-    : `${status}\n`;
 }
 
 function delay(milliseconds) {

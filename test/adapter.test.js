@@ -192,51 +192,16 @@ test("native simple settings use CLI validation and preserve complex setting bri
   assert.equal(runner.calls.length, 4);
 });
 
-test("native skill and subagent tool calls announce their activity", () => {
+test("native skill and subagent tool calls pass through without adapter notices", () => {
   const { adapter } = createAdapter();
-  const skillMessages = adapter.enhanceNativeMessages({
-    jsonrpc: "2.0",
-    method: "session/update",
-    params: {
-      sessionId: "session-1",
-      update: {
-        sessionUpdate: "tool_call",
-        toolCallId: "skill-1",
-        title: "Using skill: test-runner",
-        kind: "other",
-        status: "pending",
-        rawInput: { skill: "test-runner" },
-      },
-    },
-  });
-  const subagentMessages = adapter.enhanceNativeMessages({
-    jsonrpc: "2.0",
-    method: "session/update",
-    params: {
-      sessionId: "session-1",
-      update: {
-        sessionUpdate: "tool_call",
-        toolCallId: "task-1",
-        title: "Explore the adapter",
-        kind: "other",
-        status: "pending",
-        rawInput: { agent_type: "adapter-explorer", prompt: "Inspect the adapter" },
-      },
-    },
-  });
-
-  assert.equal(skillMessages.length, 2);
-  assert.equal(skillMessages[0].params.update.sessionUpdate, "agent_thought_chunk");
-  assert.equal(skillMessages[0].params.update.content.text, "Enabling `test-runner` skill.\n");
-  assert.equal(skillMessages[1].params.update.toolCallId, "skill-1");
-  assert.deepEqual(adapter.enhanceNativeMessages(skillMessages[1]), [skillMessages[1]]);
-  assert.equal(subagentMessages.length, 2);
-  assert.equal(subagentMessages[0].params.update.sessionUpdate, "agent_thought_chunk");
-  assert.equal(
-    subagentMessages[0].params.update.content.text,
-    "Delegating to `adapter-explorer` subagent.\n",
-  );
-  assert.equal(subagentMessages[1].params.update.toolCallId, "task-1");
+  for (const update of [
+    { sessionUpdate: "tool_call", toolCallId: "skill-1", title: "Using skill: test-runner", kind: "other", status: "pending", rawInput: { skill: "test-runner" } },
+    { sessionUpdate: "tool_call", toolCallId: "task-1", title: "Explore the adapter", kind: "other", status: "pending", rawInput: { agent_type: "adapter-explorer", prompt: "Inspect the adapter" } },
+  ]) {
+    const message = { jsonrpc: "2.0", method: "session/update", params: { sessionId: "session-1", update } };
+    assert.deepEqual(adapter.enhanceNativeMessages(message), [message]);
+  }
+  assert.deepEqual([...adapter.nativeSubagentStarts.get("session-1").keys()], ["task-1"]);
 });
 
 test("session/cancel aborts an in-flight helper command", async () => {
