@@ -1,5 +1,7 @@
 # Copilot ACP Adapter
 
+**Deprecated:** This project has served its purpose. GitHub Copilot CLI's native ACP adapter now provides most of these features; use `copilot --acp` directly instead.
+
 Dependency-free Node adapter that sits between an ACP client (such as Emacs
 `agent-shell.el`) and the GitHub Copilot CLI's own ACP server.
 
